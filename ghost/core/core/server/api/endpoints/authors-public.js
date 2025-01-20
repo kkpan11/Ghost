@@ -1,4 +1,3 @@
-const Promise = require('bluebird');
 const tpl = require('@tryghost/tpl');
 const errors = require('@tryghost/errors');
 const {mapQuery} = require('@tryghost/mongo-utils');
@@ -20,7 +19,8 @@ const rejectPrivateFieldsTransformer = input => mapQuery(input, function (value,
     };
 });
 
-module.exports = {
+/** @type {import('@tryghost/api-framework').Controller} */
+const controller = {
     docName: 'authors',
 
     browse: {
@@ -93,3 +93,5 @@ module.exports = {
         }
     }
 };
+
+module.exports = controller;

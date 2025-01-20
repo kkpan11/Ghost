@@ -19,5 +19,9 @@
     "**/ghost.map": true,
     "**/node_modules": true,
     "ghost/core/core/built/**": true
-  }
+  },
+  "tailwindCSS.experimental.classRegex": [
+    ["clsx\\(([^)]*)\\)", "(?:'|\"|`)([^']*)(?:'|\"|`)"]
+  ],
+  "git.detectSubmodules": false
 }

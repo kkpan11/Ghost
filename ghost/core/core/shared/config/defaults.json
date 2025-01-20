@@ -73,6 +73,18 @@
             "lifetime": 3600,
             "freeRetries": 4
         },
+        "user_verification": {
+            "minWait": 3600000,
+            "maxWait": 3600000,
+            "lifetime": 3600,
+            "freeRetries": 4
+        },
+        "send_verification_code": {
+            "minWait": 3600000,
+            "maxWait": 3600000,
+            "lifetime": 3600,
+            "freeRetries": 4
+        },
         "global_reset": {
             "minWait": 3600000,
             "maxWait": 3600000,
@@ -108,6 +120,12 @@
             "maxWait": 100,
             "lifetime": 1000,
             "freeRetries": 100
+        },
+        "email_preview_block": {
+            "minWait": 360000,
+            "maxWait": 360000,
+            "lifetime": 3600,
+            "freeRetries": 10
         }
     },
     "caching": {
@@ -158,6 +176,9 @@
                 "threshold": 200,
                 "level": "warn"
             }
+        },
+        "themes": {
+            "skipBootChecks": false
         }
     },
     "imageOptimization": {
@@ -171,17 +192,20 @@
     "stripeDirect": false,
     "enableStripePromoCodes": false,
     "emailAnalytics": true,
+    "linkClickTracking": true,
+    "linkClickTrackingCacheMemberUuid": false,
     "backgroundJobs": {
-        "emailAnalytics": true
+        "emailAnalytics": true,
+        "clickTrackingLastSeenAtUpdater": true
     },
     "portal": {
         "url": "https://cdn.jsdelivr.net/ghost/portal@~{version}/umd/portal.min.js",
-        "version": "2.33"
+        "version": "2.48"
     },
     "sodoSearch": {
         "url": "https://cdn.jsdelivr.net/ghost/sodo-search@~{version}/umd/sodo-search.min.js",
         "styles": "https://cdn.jsdelivr.net/ghost/sodo-search@~{version}/umd/main.css",
-        "version": "1.1"
+        "version": "1.5"
     },
     "announcementBar": {
         "url": "https://cdn.jsdelivr.net/ghost/announcement-bar@~{version}/umd/announcement-bar.min.js",
@@ -189,20 +213,11 @@
     },
     "comments": {
         "url": "https://cdn.jsdelivr.net/ghost/comments-ui@~{version}/umd/comments-ui.min.js",
-        "styles": "https://cdn.jsdelivr.net/ghost/comments-ui@~{version}/umd/main.css",
-        "version": "0.12"
-    },
-    "editor": {
-        "url": "https://cdn.jsdelivr.net/ghost/koenig-lexical@~{version}/dist/koenig-lexical.umd.js",
-        "version": "0.2"
-    },
-    "adminX": {
-        "url": "https://cdn.jsdelivr.net/ghost/admin-x-settings@~{version}/dist/admin-x-settings.umd.js",
-        "version": "0.0"
+        "version": "1.0"
     },
     "signupForm": {
         "url": "https://cdn.jsdelivr.net/ghost/signup-form@~{version}/umd/signup-form.min.js",
-        "version": "0.1"
+        "version": "0.2"
     },
     "tenor": {
         "googleApiKey": null,
@@ -228,5 +243,10 @@
             "members": [0, 100, 1000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000],
             "minDaysSinceImported": 7,
             "minDaysSinceLastEmail": 14
-        }
+        },
+    "bulkEmail": {
+        "batchSize": 1000,
+        "captureLinkClickBadMemberUuid": false
+    },
+    "disableJSBackups": false
 }

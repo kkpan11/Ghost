@@ -78,7 +78,7 @@ export default class SourceAttributionChart extends Component {
                             value = -value;
                         }
 
-                        tooltipTextEl.innerHTML = `<span class="indicator solid" style="background-color: ${data.datasets[tooltipItems.datasetIndex].backgroundColor[tooltipItems.index]}"></span><span class="value">${value}%</span><span class="metric">${label}</span>`;
+                        tooltipTextEl.innerHTML = `<span class="indicator solid" style="background-color: ${data.datasets[tooltipItems.datasetIndex].backgroundColor[tooltipItems.index]}"></span><span class="metric">${label}</span><span class="value">${value}%</span>`;
                     },
                     title: () => {
                         return null;
@@ -90,7 +90,7 @@ export default class SourceAttributionChart extends Component {
     }
 
     get chartData() {
-        let borderColor = this.feature.nightShift ? '#101114' : '#fff';
+        let borderColor = this.feature.nightShift ? '#15171A' : '#fff';
 
         return {
             labels: this.allSources.map(source => source.source),

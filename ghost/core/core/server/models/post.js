@@ -1,8 +1,7 @@
 // # Post Model
 const _ = require('lodash');
-const uuid = require('uuid');
+const crypto = require('crypto');
 const moment = require('moment');
-const Promise = require('bluebird');
 const {sequence} = require('@tryghost/promise');
 const tpl = require('@tryghost/tpl');
 const errors = require('@tryghost/errors');
@@ -20,6 +19,8 @@ const {Tag} = require('./tag');
 const {Newsletter} = require('./newsletter');
 const {BadRequestError} = require('@tryghost/errors');
 const {PostRevisions} = require('@tryghost/post-revisions');
+const {mobiledocToLexical} = require('@tryghost/kg-converters');
+const labs = require('../../shared/labs');
 
 const messages = {
     isAlreadyPublished: 'Your post is already published, please reload your page.',
@@ -88,13 +89,14 @@ Post = ghostBookshelf.Model.extend({
         }
 
         return {
-            uuid: uuid.v4(),
+            uuid: crypto.randomUUID(),
             status: 'draft',
             featured: false,
             type: 'post',
             tiers,
             visibility: visibility,
-            email_recipient_filter: 'all'
+            email_recipient_filter: 'all',
+            show_title_and_feature_image: true
         };
     },
 
@@ -365,6 +367,52 @@ Post = ghostBookshelf.Model.extend({
         ghostBookshelf.Model.prototype.emitChange.bind(this)(this, eventToTrigger, options);
     },
 
+    onFetched: async function onFetched(model, response, options) {
+        if (!labs.isSet('collectionsCard')) {
+            return;
+        }
+
+        await this.renderIfNeeded(model, options);
+    },
+
+    onFetchedCollection: async function onFetched(collection, response, options) {
+        if (!labs.isSet('collectionsCard')) {
+            return;
+        }
+
+        for await (const model of collection.models) {
+            await this.renderIfNeeded(model, options);
+        }
+    },
+
+    renderIfNeeded: async function renderIfNeeded(model, options = {}) {
+        // pages can have their html cleared to "queue" a re-render to update dynamic data such
+        // as collection cards. Detect that and re-render here so the page is always up to date
+        if (model.get('lexical') !== null && model.get('html') === null) {
+            const html = await lexicalLib.render(model.get('lexical'));
+            const plaintext = htmlToPlaintext.excerpt(html);
+
+            // avoid a DB query if we have no html - knex will set it to an empty string rather than NULL
+            if (!html && !model.get('plaintext')) {
+                return model;
+            }
+
+            // set model attributes so they are available immediately in code that uses the returned model
+            model.set('html', html);
+            model.set('plaintext', plaintext);
+
+            // update database manually using knex to avoid hooks being called multiple times
+            const query = ghostBookshelf.knex.raw('UPDATE posts SET html = ?, plaintext = ? WHERE id = ?', [html, plaintext, model.id]);
+            if (options.transacting) {
+                await query.transacting(options.transacting);
+            } else {
+                await query;
+            }
+        }
+
+        return model;
+    },
+
     /**
      * We update the tags after the Post was inserted.
      * We update the tags before the Post was updated, see `onSaving` event.
@@ -462,8 +510,24 @@ Post = ghostBookshelf.Model.extend({
         }
     },
 
-    onDestroyed: function onDestroyed(model, options) {
+    onDestroyed: async function onDestroyed(model, options) {
         ghostBookshelf.Model.prototype.onDestroyed.apply(this, arguments);
+
+        if (labs.isSet('collectionsCard') && model.previous('type') === 'post' && model.previous('status') === 'published') {
+            // reset all page HTML when a published post is deleted so they can be re-rendered
+            // on next fetch so any collection cards are "dynamically" updated
+            const resetPages = function resetPages(transacting) {
+                return ghostBookshelf.knex.raw('UPDATE posts set html = NULL WHERE type = \'page\' AND lexical IS NOT NULL').transacting(transacting);
+            };
+
+            if (options.transacting) {
+                await resetPages(options.transacting);
+            } else {
+                await ghostBookshelf.knex.transaction(async (transacting) => {
+                    await resetPages(transacting);
+                });
+            }
+        }
 
         if (model.previous('status') === 'published') {
             model.emitChange('unpublished', Object.assign({usePreviousAttribute: true}, options));
@@ -549,6 +613,17 @@ Post = ghostBookshelf.Model.extend({
         const generatedFields = ['html', 'plaintext'];
         let tagsToSave;
         const ops = [];
+
+        // normally we don't allow both mobiledoc & lexical through at the API level but there's
+        // an exception for ?source=html which always sets both when the lexical editor is enabled.
+        // That's necessary because at the input serializer layer we don't have access to the
+        // actual model to check if this would result in a change of format
+
+        if (this.previous('mobiledoc') && this.get('lexical')) {
+            this.set('lexical', null);
+        } else if (this.get('mobiledoc') && this.get('lexical')) {
+            this.set('mobiledoc', null);
+        }
 
         // CASE: disallow published -> scheduled
         // @TODO: remove when we have versioning based on updated_at
@@ -646,12 +721,12 @@ Post = ghostBookshelf.Model.extend({
         }
 
         if (!this.get('mobiledoc') && !this.get('lexical')) {
-            this.set('mobiledoc', JSON.stringify(mobiledocLib.blankDocument));
+            this.set('lexical', JSON.stringify(lexicalLib.blankDocument));
         }
 
         // If we're force re-rendering we want to make sure that all image cards
         // have original dimensions stored in the payload for use by card renderers
-        if (options.force_rerender) {
+        if (options.force_rerender && this.get('mobiledoc')) {
             this.set('mobiledoc', await mobiledocLib.populateImageSizes(this.get('mobiledoc')));
         }
 
@@ -667,7 +742,7 @@ Post = ghostBookshelf.Model.extend({
             )
         ) {
             try {
-                this.set('html', mobiledocLib.mobiledocHtmlRenderer.render(JSON.parse(this.get('mobiledoc'))));
+                this.set('html', mobiledocLib.render(JSON.parse(this.get('mobiledoc'))));
             } catch (err) {
                 throw new errors.ValidationError({
                     message: tpl(messages.invalidMobiledocStructure),
@@ -688,7 +763,7 @@ Post = ghostBookshelf.Model.extend({
             )
         ) {
             try {
-                this.set('html', lexicalLib.render(this.get('lexical')));
+                this.set('html', await lexicalLib.render(this.get('lexical'), {transacting: options.transacting}));
             } catch (err) {
                 throw new errors.ValidationError({
                     message: tpl(messages.invalidLexicalStructure),
@@ -829,7 +904,7 @@ Post = ghostBookshelf.Model.extend({
             ops.push(function updateRevisions() {
                 return ghostBookshelf.model('MobiledocRevision')
                     .findAll(Object.assign({
-                        filter: `post_id:${model.id}`,
+                        filter: `post_id:'${model.id}'`,
                         columns: ['id']
                     }, _.pick(options, 'transacting')))
                     .then((revisions) => {
@@ -883,7 +958,7 @@ Post = ghostBookshelf.Model.extend({
             ops.push(async function updateRevisions() {
                 const revisionModels = await ghostBookshelf.model('PostRevision')
                     .findAll(Object.assign({
-                        filter: `post_id:${model.id}`,
+                        filter: `post_id:'${model.id}'`,
                         columns: ['id', 'lexical', 'created_at', 'author_id', 'title', 'reason', 'post_status', 'created_at_ts', 'feature_image']
                     }, _.pick(options, 'transacting')));
 
@@ -898,6 +973,7 @@ Post = ghostBookshelf.Model.extend({
                     feature_image_alt: model.get('posts_meta')?.feature_image_alt,
                     feature_image_caption: model.get('posts_meta')?.feature_image_caption,
                     title: model.get('title'),
+                    custom_excerpt: model.get('custom_excerpt'),
                     post_status: model.get('status')
                 };
 
@@ -913,10 +989,41 @@ Post = ghostBookshelf.Model.extend({
             });
         }
 
+        // CASE: Convert post to lexical on the fly
+        if (options.convert_to_lexical) {
+            ops.push(async function convertToLexical() {
+                const mobiledoc = model.get('mobiledoc');
+                if (mobiledoc !== null) { // only run conversion when there is a mobiledoc string
+                    const lexical = mobiledocToLexical(mobiledoc);
+                    model.set('lexical', lexical);
+                    model.set('mobiledoc', null);
+                }
+            });
+        }
+
         if (this.get('tiers')) {
             this.set('tiers', this.get('tiers').map(t => ({
                 id: t.id
             })));
+
+            // Don't associate the free tier with the post
+            const freeTier = await ghostBookshelf.model('Product').findOne({type: 'free'}, {require: false, transacting: options.transacting ?? undefined});
+            if (freeTier) {
+                this.set('tiers', this.get('tiers').filter(t => t.id !== freeTier.id));
+            }
+        }
+
+        if (labs.isSet('collectionsCard') && this.get('type') === 'post' && (newStatus === 'published' || olderStatus === 'published')) {
+            // reset all page HTML when a published post is updated so they can be re-rendered
+            // on next fetch so any collection cards are "dynamically" updated
+            ops.push(async function resetPageHTML() {
+                const query = ghostBookshelf.knex.raw('UPDATE posts set html = NULL WHERE type = ? AND lexical IS NOT NULL', ['page']);
+                if (options.transacting) {
+                    await query.transacting(options.transacting);
+                } else {
+                    await query;
+                }
+            });
         }
 
         return sequence(ops);
@@ -1153,10 +1260,11 @@ Post = ghostBookshelf.Model.extend({
         // these are the only options that can be passed to Bookshelf / Knex.
         const validOptions = {
             findOne: ['columns', 'importing', 'withRelated', 'require', 'filter'],
-            findPage: ['status'],
+            findPage: ['status','selectRaw'],
+
             findAll: ['columns', 'filter'],
             destroy: ['destroyAll', 'destroyBy'],
-            edit: ['filter', 'email_segment', 'force_rerender', 'newsletter', 'save_revision']
+            edit: ['filter', 'email_segment', 'force_rerender', 'newsletter', 'save_revision', 'convert_to_lexical']
         };
 
         // The post model additionally supports having a formats option
@@ -1182,11 +1290,13 @@ Post = ghostBookshelf.Model.extend({
             options.withRelated = _.union(['authors', 'tags', 'post_revisions', 'post_revisions.author'], options.withRelated || []);
         }
 
-        const META_ATTRIBUTES = _.without(ghostBookshelf.model('PostsMeta').prototype.permittedAttributes(), 'id', 'post_id');
-
         // NOTE: only include post_meta relation when requested in 'columns' or by default
         //       optimization is needed to be able to perform .findAll on large SQLite datasets
-        if (!options.columns || (options.columns && _.intersection(META_ATTRIBUTES, options.columns).length)) {
+        if (!options.columns
+        || (
+            options.columns
+            && _.intersection(_.without(ghostBookshelf.model('PostsMeta').prototype.permittedAttributes(), 'id', 'post_id'), options.columns).length)
+        ) {
             options.withRelated = _.union(['posts_meta'], options.withRelated || []);
         }
 
@@ -1274,6 +1384,24 @@ Post = ghostBookshelf.Model.extend({
         return editPost();
     },
 
+    bulkEdit: async function bulkEdit(ids, tableName, options) {
+        if (tableName === this.prototype.tableName) {
+            const result = await ghostBookshelf.Model.bulkEdit.call(this, ids, tableName, options);
+
+            if (labs.isSet('collectionsCard')) {
+                // reset all page HTML so collection cards can be re-rendered with updated posts
+                // NOTE: we can't check for only published edits here as we don't have access to previous values
+                //       to see if a previously published post has been unpublished, so we just reset all pages
+                const pageResetQuery = ghostBookshelf.knex.raw('UPDATE posts set html = NULL WHERE type = "page" AND lexical IS NOT NULL');
+                await (options.transacting ? pageResetQuery.transacting(options.transacting) : pageResetQuery);
+            }
+
+            return result;
+        } else {
+            return ghostBookshelf.Model.bulkEdit.call(this, ids, tableName, options);
+        }
+    },
+
     /**
      * ### Add
      * @extends ghostBookshelf.Model.add to handle returning the full object
@@ -1318,6 +1446,34 @@ Post = ghostBookshelf.Model.extend({
         }
 
         return destroyPost();
+    },
+
+    bulkDestroy: async function bulkDestroy(ids, tableName, options) {
+        if (tableName === this.prototype.tableName) {
+            if (labs.isSet('collectionsCard')) {
+                // get count of published posts to be destroyed before they no longer exist to count
+                const deletedPublishedCount = await this.query((qb) => {
+                    qb.where('type', 'post')
+                        .where('status', 'published')
+                        .whereIn('id', ids);
+                }).count({transacting: options.transacting});
+
+                const result = await ghostBookshelf.Model.bulkDestroy.call(this, ids, tableName, options);
+
+                // if we've deleted any published posts, we need to reset the html for all pages so dynamic collection
+                // card content can be re-rendered
+                if (deletedPublishedCount > 0) {
+                    const pageResetQuery = ghostBookshelf.knex.raw('UPDATE posts set html = NULL WHERE type = "page" AND lexical IS NOT NULL');
+                    await (options.transacting ? pageResetQuery.transacting(options.transacting) : pageResetQuery);
+                }
+
+                return result;
+            } else {
+                return ghostBookshelf.Model.bulkDestroy.call(this, ids, tableName, options);
+            }
+        } else {
+            return ghostBookshelf.Model.bulkDestroy.call(this, ids, tableName, options);
+        }
     },
 
     // NOTE: the `authors` extension is the parent of the post model. It also has a permissible function.

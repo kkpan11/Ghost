@@ -1,9 +1,8 @@
-import React from 'react';
 import {render} from '@testing-library/react';
 import {site} from './utils/fixtures';
 import App from './App';
 
-const setup = async (overrides) => {
+const setup = async () => {
     const testState = {
         site,
         member: null,
@@ -11,7 +10,8 @@ const setup = async (overrides) => {
         brandColor: site.accent_color,
         page: 'signup',
         initStatus: 'success',
-        showPopup: true
+        showPopup: true,
+        commentsIsLoading: false
     };
     const {...utils} = render(
         <App testState={testState} />

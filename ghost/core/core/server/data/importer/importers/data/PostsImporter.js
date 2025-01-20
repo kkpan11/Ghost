@@ -1,6 +1,6 @@
 const debug = require('@tryghost/debug')('importer:posts');
 const _ = require('lodash');
-const uuid = require('uuid');
+const crypto = require('crypto');
 const BaseImporter = require('./Base');
 const mobiledocLib = require('../../../../lib/mobiledoc');
 const validator = require('@tryghost/validator');
@@ -29,7 +29,7 @@ class PostsImporter extends BaseImporter {
     sanitizeAttributes() {
         _.each(this.dataToImport, (obj) => {
             if (!validator.isUUID(obj.uuid || '')) {
-                obj.uuid = uuid.v4();
+                obj.uuid = crypto.randomUUID();
             }
 
             // we used to have post.page=true/false
@@ -237,7 +237,7 @@ class PostsImporter extends BaseImporter {
             // CASE 1: you are importing old editor posts
             // CASE 2: you are importing Koenig Beta posts
             // CASE 3: you are importing Koenig 2.0 posts
-            if (model.mobiledoc) {
+            if (model.mobiledoc && !model.lexical) {
                 let mobiledoc;
 
                 try {
@@ -271,10 +271,10 @@ class PostsImporter extends BaseImporter {
                 });
 
                 model.mobiledoc = JSON.stringify(mobiledoc);
-                model.html = mobiledocLib.mobiledocHtmlRenderer.render(JSON.parse(model.mobiledoc));
-            } else if (model.html) {
+                model.html = mobiledocLib.render(JSON.parse(model.mobiledoc));
+            } else if (model.html && !model.lexical) {
                 model.mobiledoc = JSON.stringify(mobiledocLib.htmlToMobiledocConverter(model.html));
-                model.html = mobiledocLib.mobiledocHtmlRenderer.render(JSON.parse(model.mobiledoc));
+                model.html = mobiledocLib.render(JSON.parse(model.mobiledoc));
             }
 
             this.sanitizePostsMeta(model);

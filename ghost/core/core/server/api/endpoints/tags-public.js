@@ -1,4 +1,3 @@
-const Promise = require('bluebird');
 const tpl = require('@tryghost/tpl');
 const errors = require('@tryghost/errors');
 const models = require('../../models');
@@ -10,7 +9,8 @@ const messages = {
     tagNotFound: 'Tag not found.'
 };
 
-module.exports = {
+/** @type {import('@tryghost/api-framework').Controller} */
+const controller = {
     docName: 'tags',
 
     browse: {
@@ -77,3 +77,5 @@ module.exports = {
         }
     }
 };
+
+module.exports = controller;

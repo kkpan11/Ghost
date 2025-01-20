@@ -26,6 +26,18 @@
             "lifetime": 3600,
             "freeRetries": 4
         },
+        "user_verification": {
+            "minWait": 3600000,
+            "maxWait": 3600000,
+            "lifetime": 3600,
+            "freeRetries": 4
+        },
+        "send_verification_code": {
+            "minWait": 3600000,
+            "maxWait": 3600000,
+            "lifetime": 3600,
+            "freeRetries": 4
+        },
         "global_reset": {
             "minWait": 3600000,
             "maxWait": 3600000,
@@ -49,6 +61,12 @@
             "maxWait": 100000,
             "lifetime": 3600,
             "freeRetries": 3
+        },
+        "email_preview_block": {
+            "minWait": 360000,
+            "maxWait": 360000,
+            "lifetime": 3600,
+            "freeRetries": 10
         }
     },
     "privacy": {

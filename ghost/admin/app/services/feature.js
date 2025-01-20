@@ -59,20 +59,22 @@ export default class FeatureService extends Service {
     @feature('referralInviteDismissed', {user: true}) referralInviteDismissed;
 
     // labs flags
-    @feature('urlCache') urlCache;
-    @feature('lexicalEditor') lexicalEditor;
-    @feature('lexicalMultiplayer') lexicalMultiplayer;
     @feature('audienceFeedback') audienceFeedback;
     @feature('webmentions') webmentions;
-    @feature('websockets') websockets;
     @feature('stripeAutomaticTax') stripeAutomaticTax;
     @feature('emailCustomization') emailCustomization;
     @feature('i18n') i18n;
     @feature('announcementBar') announcementBar;
     @feature('signupCard') signupCard;
-    @feature('signupForm') signupForm;
-    @feature('collections') collections;
-    @feature('adminXSettings') adminXSettings;
+    @feature('mailEvents') mailEvents;
+    @feature('collectionsCard') collectionsCard;
+    @feature('importMemberTier') importMemberTier;
+    @feature('lexicalIndicators') lexicalIndicators;
+    @feature('adminXDemo') adminXDemo;
+    @feature('ActivityPub') ActivityPub;
+    @feature('editorExcerpt') editorExcerpt;
+    @feature('contentVisibility') contentVisibility;
+    @feature('postsX') postsX;
 
     _user = null;
 

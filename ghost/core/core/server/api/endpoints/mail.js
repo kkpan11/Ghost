@@ -1,4 +1,3 @@
-const Promise = require('bluebird');
 const tpl = require('@tryghost/tpl');
 const mailService = require('../../services/mail');
 const api = require('./');
@@ -36,7 +35,8 @@ _private.sendMail = (object) => {
     });
 };
 
-module.exports = {
+/** @type {import('@tryghost/api-framework').Controller} */
+const controller = {
     docName: 'mail',
 
     send: {
@@ -47,23 +47,7 @@ module.exports = {
         query(frame) {
             return _private.sendMail(frame.data);
         }
-    },
-
-    sendTest(frame) {
-        return mailService.utils.generateContent({template: 'test'})
-            .then((content) => {
-                const payload = {
-                    mail: [{
-                        message: {
-                            to: frame.user.get('email'),
-                            subject: tpl(messages.testGhostEmail),
-                            html: content.html,
-                            text: content.text
-                        }
-                    }]
-                };
-
-                return _private.sendMail(payload);
-            });
     }
 };
+
+module.exports = controller;

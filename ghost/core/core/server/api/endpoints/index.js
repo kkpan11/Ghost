@@ -12,10 +12,6 @@ module.exports = {
         return apiFramework.pipeline(require('./authentication'), localUtils);
     },
 
-    get collections() {
-        return apiFramework.pipeline(require('./collections'), localUtils);
-    },
-
     get db() {
         return apiFramework.pipeline(require('./db'), localUtils);
     },
@@ -197,8 +193,24 @@ module.exports = {
         return apiFramework.pipeline(require('./comments'), localUtils);
     },
 
+    get commentReplies() {
+        return apiFramework.pipeline(require('./comment-replies'), localUtils);
+    },
+
     get links() {
         return apiFramework.pipeline(require('./links'), localUtils);
+    },
+
+    get mailEvents() {
+        return apiFramework.pipeline(require('./mail-events'), localUtils);
+    },
+
+    get recommendations() {
+        return apiFramework.pipeline(require('./recommendations'), localUtils);
+    },
+
+    get incomingRecommendations() {
+        return apiFramework.pipeline(require('./incoming-recommendations'), localUtils);
     },
 
     /**
@@ -247,5 +259,9 @@ module.exports = {
 
     get feedbackMembers() {
         return apiFramework.pipeline(require('./feedback-members'), localUtils, 'members');
+    },
+
+    get recommendationsPublic() {
+        return apiFramework.pipeline(require('./recommendations-public'), localUtils, 'content');
     }
 };

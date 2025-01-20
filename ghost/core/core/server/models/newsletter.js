@@ -1,6 +1,6 @@
 const ghostBookshelf = require('./base');
 const ObjectID = require('bson-objectid').default;
-const uuid = require('uuid');
+const crypto = require('crypto');
 const urlUtils = require('../../shared/url-utils');
 
 const Newsletter = ghostBookshelf.Model.extend({
@@ -8,7 +8,7 @@ const Newsletter = ghostBookshelf.Model.extend({
 
     defaults: function defaults() {
         return {
-            uuid: uuid.v4(),
+            uuid: crypto.randomUUID(),
             sender_reply_to: 'newsletter',
             status: 'active',
             visibility: 'members',
@@ -29,7 +29,8 @@ const Newsletter = ghostBookshelf.Model.extend({
             background_color: 'light',
             border_color: null,
             title_color: null,
-            feedback_enabled: false
+            feedback_enabled: false,
+            show_excerpt: false
         };
     },
 
@@ -150,6 +151,16 @@ const Newsletter = ghostBookshelf.Model.extend({
                         .from('members_newsletters')
                         .whereRaw('members_newsletters.newsletter_id = newsletters.id')
                         .as('count__members');
+                });
+            },
+            active_members(modelOrCollection) {
+                modelOrCollection.query('columns', 'newsletters.*', (qb) => {
+                    qb.count('members_newsletters.id')
+                        .from('members_newsletters')
+                        .join('members', 'members.id', 'members_newsletters.member_id')
+                        .whereRaw('members_newsletters.newsletter_id = newsletters.id')
+                        .andWhere('members.email_disabled', false)
+                        .as('count__active_members');
                 });
             }
         };

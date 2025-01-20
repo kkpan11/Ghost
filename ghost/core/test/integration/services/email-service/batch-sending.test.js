@@ -6,14 +6,12 @@ const sinon = require('sinon');
 const assert = require('assert/strict');
 const jobManager = require('../../../../core/server/services/jobs/job-service');
 const _ = require('lodash');
-const {MailgunEmailProvider} = require('@tryghost/email-service');
-const escapeRegExp = require('lodash/escapeRegExp');
 const configUtils = require('../../../utils/configUtils');
 const {settingsCache} = require('../../../../core/server/services/settings-helpers');
 const DomainEvents = require('@tryghost/domain-events');
 const emailService = require('../../../../core/server/services/email-service');
-const should = require('should');
 const {mockSetting, stripeMocker} = require('../../../utils/e2e-framework-mock-manager');
+const {sendEmail, sendFailedEmail, matchEmailSnapshot, getDefaultNewsletter, retryEmail} = require('../../../utils/batch-email-utils');
 
 const mobileDocExample = '{"version":"0.3.1","atoms":[],"cards":[],"markups":[],"sections":[[1,"p",[[0,[],0,"Hello world"]]]],"ghostVersion":"4.0"}';
 const mobileDocWithPaywall = '{"version":"0.3.1","markups":[],"atoms":[],"cards":[["paywall",{}]],"sections":[[1,"p",[[0,[],0,"Free content"]]],[10,0],[1,"p",[[0,[],0,"Members content"]]]]}';
@@ -26,7 +24,6 @@ const mobileDocWithReplacements = '{"version":"0.3.1","atoms":[],"cards":[["emai
 let agent;
 let stubbedSend;
 let frontendAgent;
-let lastEmailModel;
 
 function sortBatches(a, b) {
     const aId = a.get('provider_id');
@@ -40,165 +37,6 @@ function sortBatches(a, b) {
     return aId.localeCompare(bId);
 }
 
-async function getDefaultNewsletter() {
-    const newsletterSlug = fixtureManager.get('newsletters', 0).slug;
-    return await models.Newsletter.findOne({slug: newsletterSlug});
-}
-
-let postCounter = 0;
-
-async function createPublishedPostEmail(settings = {}, email_recipient_filter) {
-    const post = {
-        title: 'A random test post',
-        status: 'draft',
-        feature_image_alt: 'Testing sending',
-        feature_image_caption: 'Testing <b>feature image caption</b>',
-        created_at: moment().subtract(2, 'days').toISOString(),
-        updated_at: moment().subtract(2, 'days').toISOString(),
-        created_by: ObjectId().toHexString(),
-        updated_by: ObjectId().toHexString(),
-        ...settings
-    };
-
-    const res = await agent.post('posts/')
-        .body({posts: [post]})
-        .expectStatus(201);
-
-    const id = res.body.posts[0].id;
-
-    // Make sure all posts are published in the samre order, with minimum 1s difference (to have consistent ordering when including latests posts)
-    postCounter += 1;
-
-    const updatedPost = {
-        status: 'published',
-        updated_at: res.body.posts[0].updated_at,
-        // Fixed publish date to make sure snapshots are consistent
-        published_at: moment(new Date(2050, 0, 1, 12, 0, postCounter)).toISOString()
-    };
-
-    const newsletterSlug = fixtureManager.get('newsletters', 0).slug;
-    await agent.put(`posts/${id}/?newsletter=${newsletterSlug}${email_recipient_filter ? `&email_segment=${email_recipient_filter}` : ''}`)
-        .body({posts: [updatedPost]})
-        .expectStatus(200);
-
-    const emailModel = await models.Email.findOne({
-        post_id: id
-    });
-    assert(!!emailModel);
-
-    return emailModel;
-}
-
-async function sendEmail(settings, email_recipient_filter) {
-    // Prepare a post and email model
-    const completedPromise = jobManager.awaitCompletion('batch-sending-service-job');
-    const emailModel = await createPublishedPostEmail(settings, email_recipient_filter);
-
-    // Await sending job
-    await completedPromise;
-
-    await emailModel.refresh();
-    assert.equal(emailModel.get('status'), 'submitted');
-
-    lastEmailModel = emailModel;
-
-    // Get the email that was sent
-    return {emailModel, ...(await getLastEmail())};
-}
-
-async function retryEmail(emailId) {
-    await agent.put(`emails/${emailId}/retry`)
-        .expectStatus(200);
-}
-
-/**
- * Returns the last email that was sent via the stub, with all recipient variables replaced
- */
-async function getLastEmail() {
-    // Get the email body
-    sinon.assert.called(stubbedSend);
-    const messageData = stubbedSend.lastArg;
-    let html = messageData.html;
-    let plaintext = messageData.text;
-    const recipientVariables = JSON.parse(messageData['recipient-variables']);
-    const recipientData = recipientVariables[Object.keys(recipientVariables)[0]];
-
-    for (const [key, value] of Object.entries(recipientData)) {
-        html = html.replace(new RegExp(`%recipient.${key}%`, 'g'), value);
-        plaintext = plaintext.replace(new RegExp(`%recipient.${key}%`, 'g'), value);
-    }
-
-    return {
-        emailModel: lastEmailModel,
-        ...messageData,
-        html,
-        plaintext,
-        recipientData
-    };
-}
-
-function testCleanedSnapshot(html, ignoreReplacements) {
-    for (const {match, replacement} of ignoreReplacements) {
-        if (match instanceof RegExp) {
-            html = html.replace(match, replacement);
-        } else {
-            html = html.replace(new RegExp(escapeRegExp(match), 'g'), replacement);
-        }
-    }
-    should({html}).matchSnapshot();
-}
-
-async function lastEmailMatchSnapshot() {
-    const lastEmail = await getLastEmail();
-    const defaultNewsletter = await lastEmail.emailModel.getLazyRelation('newsletter');
-    const linkRegexp = /http:\/\/127\.0\.0\.1:2369\/r\/\w+/g;
-
-    const ignoreReplacements = [
-        {
-            match: /\d{1,2}\s\w+\s\d{4}/g,
-            replacement: 'date'
-        },
-        {
-            match: defaultNewsletter.get('uuid'),
-            replacement: 'requested-newsletter-uuid'
-        },
-        {
-            match: lastEmail.emailModel.get('post_id'),
-            replacement: 'post-id'
-        },
-        {
-            match: (await lastEmail.emailModel.getLazyRelation('post')).get('uuid'),
-            replacement: 'post-uuid'
-        },
-        {
-            match: linkRegexp,
-            replacement: 'http://127.0.0.1:2369/r/xxxxxx'
-        },
-        {
-            match: linkRegexp,
-            replacement: 'http://127.0.0.1:2369/r/xxxxxx'
-        }
-    ];
-
-    if (lastEmail.recipientData.uuid) {
-        ignoreReplacements.push({
-            match: lastEmail.recipientData.uuid,
-            replacement: 'member-uuid'
-        });
-    } else {
-        // Sometimes uuid is not used if link tracking is disabled
-        // Need to replace unsubscribe url instead (uuid is missing but it is inside the usubscribe url, causing snapshot updates)
-        // Need to use unshift to make replacement work before newsletter uuid
-        ignoreReplacements.unshift({
-            match: lastEmail.recipientData.unsubscribe_url,
-            replacement: 'unsubscribe_url'
-        });
-    }
-
-    testCleanedSnapshot(lastEmail.html, ignoreReplacements);
-    testCleanedSnapshot(lastEmail.plaintext, ignoreReplacements);
-}
-
 /**
  * Test amount of batches and segmenting for a given email
  *
@@ -207,23 +45,16 @@ async function lastEmailMatchSnapshot() {
  * @param {{recipients: number, segment: string | null}[]} expectedBatches
  */
 async function testEmailBatches(settings, email_recipient_filter, expectedBatches) {
-    const completedPromise = jobManager.awaitCompletion('batch-sending-service-job');
-    const emailModel = await createPublishedPostEmail(settings, email_recipient_filter);
+    const {emailModel} = await sendEmail(agent, settings, email_recipient_filter);
 
     assert.equal(emailModel.get('source_type'), 'mobiledoc');
     assert(emailModel.get('subject'));
     assert(emailModel.get('from'));
-
-    // Await sending job
-    await completedPromise;
-
-    await emailModel.refresh();
-    assert(emailModel.get('status'), 'submitted');
     const expectedTotal = expectedBatches.reduce((acc, batch) => acc + batch.recipients, 0);
     assert.equal(emailModel.get('email_count'), expectedTotal, 'This email should have an email_count of ' + expectedTotal + ' recipients');
 
     // Did we create batches?
-    const batches = await models.EmailBatch.findAll({filter: `email_id:${emailModel.id}`});
+    const batches = await models.EmailBatch.findAll({filter: `email_id:'${emailModel.id}'`});
     assert.equal(batches.models.length, expectedBatches.length);
     const remainingBatches = batches.models.slice();
     const emailRecipients = [];
@@ -243,7 +74,7 @@ async function testEmailBatches(settings, email_recipient_filter, expectedBatche
         assert.equal(firstBatch.get('error_data'), null);
 
         // Did we create recipients?
-        const emailRecipientsFirstBatch = await models.EmailRecipient.findAll({filter: `email_id:${emailModel.id}+batch_id:${firstBatch.id}`});
+        const emailRecipientsFirstBatch = await models.EmailRecipient.findAll({filter: `email_id:'${emailModel.id}'+batch_id:'${firstBatch.id}'`});
         assert.equal(emailRecipientsFirstBatch.models.length, expectedBatch.recipients);
 
         emailRecipients.push(...emailRecipientsFirstBatch.models);
@@ -259,7 +90,7 @@ describe('Batch sending tests', function () {
     let ghostServer;
 
     beforeEach(function () {
-        MailgunEmailProvider.BATCH_SIZE = 100;
+        configUtils.set('bulkEmail:batchSize', 100);
         stubbedSend = sinon.fake.resolves({
             id: 'stubbed-email-id'
         });
@@ -278,6 +109,7 @@ describe('Batch sending tests', function () {
             value: false
         }], {context: {internal: true}});
         mockManager.restore();
+        await jobManager.allSettled();
     });
 
     before(async function () {
@@ -303,21 +135,15 @@ describe('Batch sending tests', function () {
 
     it('Can send a scheduled post email', async function () {
         // Prepare a post and email model
-        const emailModel = await createPublishedPostEmail();
+        const {emailModel} = await sendEmail(agent);
 
-        assert.equal(emailModel.get('source_type'), 'mobiledoc');
+        assert.equal(emailModel.get('source_type'), 'lexical');
         assert(emailModel.get('subject'));
         assert(emailModel.get('from'));
-
-        // Await sending job
-        await jobManager.allSettled();
-
-        await emailModel.refresh();
-        assert.equal(emailModel.get('status'), 'submitted');
         assert.equal(emailModel.get('email_count'), 4);
 
         // Did we create batches?
-        const batches = await models.EmailBatch.findAll({filter: `email_id:${emailModel.id}`});
+        const batches = await models.EmailBatch.findAll({filter: `email_id:'${emailModel.id}'`});
         assert.equal(batches.models.length, 1);
 
         // Check all batches are in send state
@@ -332,7 +158,7 @@ describe('Batch sending tests', function () {
         }
 
         // Did we create recipients?
-        const emailRecipients = await models.EmailRecipient.findAll({filter: `email_id:${emailModel.id}`});
+        const emailRecipients = await models.EmailRecipient.findAll({filter: `email_id:'${emailModel.id}'`});
         assert.equal(emailRecipients.models.length, 4);
 
         for (const recipient of emailRecipients.models) {
@@ -345,13 +171,8 @@ describe('Batch sending tests', function () {
     });
 
     it('Protects the email job from being run multiple times at the same time', async function () {
-        this.retries(1);
         // Prepare a post and email model
-        const emailModel = await createPublishedPostEmail();
-
-        assert.equal(emailModel.get('source_type'), 'mobiledoc');
-        assert(emailModel.get('subject'));
-        assert(emailModel.get('from'));
+        const {emailModel} = await sendEmail(agent);
 
         // Retry sending a couple of times
         const promises = [];
@@ -368,7 +189,7 @@ describe('Batch sending tests', function () {
         assert.equal(emailModel.get('email_count'), 4);
 
         // Did we create batches?
-        const batches = await models.EmailBatch.findAll({filter: `email_id:${emailModel.id}`});
+        const batches = await models.EmailBatch.findAll({filter: `email_id:'${emailModel.id}'`});
         assert.equal(batches.models.length, 1);
     });
 
@@ -386,32 +207,27 @@ describe('Batch sending tests', function () {
                 status: 'free',
                 newsletters: [{
                     id: fixtureManager.get('newsletters', 0).id
-                }]
+                }],
+                email_disabled: false
             });
 
             return r;
         });
 
-        // Prepare a post and email model
-        const completedPromise = jobManager.awaitCompletion('batch-sending-service-job');
-        const emailModel = await createPublishedPostEmail();
+        const {emailModel} = await sendEmail(agent);
 
-        // Await sending job
-        await completedPromise;
         assert(addStub.calledOnce);
         assert.ok(laterMember);
         addStub.restore();
 
-        await emailModel.refresh();
-        assert.equal(emailModel.get('status'), 'submitted');
         assert.equal(emailModel.get('email_count'), 4);
 
         // Did we create batches?
-        const batches = await models.EmailBatch.findAll({filter: `email_id:${emailModel.id}`});
+        const batches = await models.EmailBatch.findAll({filter: `email_id:'${emailModel.id}'`});
         assert.equal(batches.models.length, 1);
 
         // Did we create recipients?
-        const emailRecipients = await models.EmailRecipient.findAll({filter: `email_id:${emailModel.id}`});
+        const emailRecipients = await models.EmailRecipient.findAll({filter: `email_id:'${emailModel.id}'`});
         assert.equal(emailRecipients.models.length, 4);
 
         for (const recipient of emailRecipients.models) {
@@ -420,13 +236,13 @@ describe('Batch sending tests', function () {
         }
 
         // Create a new email and see if it is included now
-        const completedPromise2 = jobManager.awaitCompletion('batch-sending-service-job');
-        const emailModel2 = await createPublishedPostEmail();
-        await completedPromise2;
-        await emailModel2.refresh();
+        const {emailModel: emailModel2} = await sendEmail(agent);
         assert.equal(emailModel2.get('email_count'), 5);
-        const emailRecipients2 = await models.EmailRecipient.findAll({filter: `email_id:${emailModel2.id}`});
+        const emailRecipients2 = await models.EmailRecipient.findAll({filter: `email_id:'${emailModel2.id}'`});
         assert.equal(emailRecipients2.models.length, emailRecipients.models.length + 1);
+
+        // Clean up laterMember
+        await models.Member.destroy({id: laterMember.id});
     });
 
     it('Splits recipients in free and paid batch', async function () {
@@ -436,7 +252,7 @@ describe('Batch sending tests', function () {
             // Required to trigger the paywall
             visibility: 'paid'
         }, null, [
-            {segment: 'status:free', recipients: 3},
+            {segment: 'status:free', recipients: 2},
             {segment: 'status:-free', recipients: 2}
         ]);
     });
@@ -445,7 +261,7 @@ describe('Batch sending tests', function () {
         await testEmailBatches({
             mobiledoc: mobileDocWithFreeMemberOnly // = different content for paid and free members (extra content for free in this case)
         }, null, [
-            {segment: 'status:free', recipients: 3},
+            {segment: 'status:free', recipients: 2},
             {segment: 'status:-free', recipients: 2}
         ]);
     });
@@ -454,16 +270,16 @@ describe('Batch sending tests', function () {
         await testEmailBatches({
             mobiledoc: mobileDocWithPaidMemberOnly // = different content for paid and free members (extra content for paid in this case)
         }, null, [
-            {segment: 'status:free', recipients: 3},
+            {segment: 'status:free', recipients: 2},
             {segment: 'status:-free', recipients: 2}
         ]);
     });
 
-    it('Splits recipients in free and paid batch when including paid member only content', async function () {
+    it('Splits recipients in free and paid batch when including different paid and free member content', async function () {
         await testEmailBatches({
             mobiledoc: mobileDocWithPaidAndFreeMemberOnly // = different content for paid and free members
         }, null, [
-            {segment: 'status:free', recipients: 3},
+            {segment: 'status:free', recipients: 2},
             {segment: 'status:-free', recipients: 2}
         ]);
     });
@@ -474,7 +290,7 @@ describe('Batch sending tests', function () {
             // Required to trigger the paywall
             visibility: 'paid'
         }, null, [
-            {segment: 'status:free', recipients: 3},
+            {segment: 'status:free', recipients: 2},
             {segment: 'status:-free', recipients: 2}
         ]);
     });
@@ -483,7 +299,7 @@ describe('Batch sending tests', function () {
         await testEmailBatches({
             mobiledoc: mobileDocExample // = same content for free and paid, no need to split batches
         }, null, [
-            {segment: null, recipients: 5}
+            {segment: null, recipients: 4}
         ]);
     });
 
@@ -548,11 +364,10 @@ describe('Batch sending tests', function () {
     });
 
     it('Splits up in batches according to email provider batch size', async function () {
-        MailgunEmailProvider.BATCH_SIZE = 1;
+        configUtils.set('bulkEmail:batchSize', 1);
         await testEmailBatches({
             mobiledoc: mobileDocExample
         }, null, [
-            {segment: null, recipients: 1},
             {segment: null, recipients: 1},
             {segment: null, recipients: 1},
             {segment: null, recipients: 1},
@@ -561,7 +376,7 @@ describe('Batch sending tests', function () {
     });
 
     it('Splits up in batches according to email provider batch size with paid and free segments', async function () {
-        MailgunEmailProvider.BATCH_SIZE = 1;
+        configUtils.set('bulkEmail:batchSize', 1);
         await testEmailBatches({
             mobiledoc: mobileDocWithPaidMemberOnly
         }, null, [
@@ -571,13 +386,12 @@ describe('Batch sending tests', function () {
 
             // 3 free
             {segment: 'status:free', recipients: 1},
-            {segment: 'status:free', recipients: 1},
             {segment: 'status:free', recipients: 1}
         ]);
     });
 
     it('One failed batch marks the email as failed and allows for a retry', async function () {
-        MailgunEmailProvider.BATCH_SIZE = 1;
+        configUtils.set('bulkEmail:batchSize', 1);
         let counter = 0;
         stubbedSend = async function () {
             counter += 1;
@@ -594,22 +408,12 @@ describe('Batch sending tests', function () {
         };
 
         // Prepare a post and email model
-        const emailModel = await createPublishedPostEmail();
-
-        assert.equal(emailModel.get('source_type'), 'mobiledoc');
-        assert(emailModel.get('subject'));
-        assert(emailModel.get('from'));
-
-        // Await sending job
-        await jobManager.allSettled();
-
-        await emailModel.refresh();
-        assert.equal(emailModel.get('status'), 'failed');
-        assert.equal(emailModel.get('email_count'), 5);
+        const {emailModel} = await sendFailedEmail(agent);
+        assert.equal(emailModel.get('email_count'), 4);
 
         // Did we create batches?
-        let batches = await models.EmailBatch.findAll({filter: `email_id:${emailModel.id}`});
-        assert.equal(batches.models.length, 5);
+        let batches = await models.EmailBatch.findAll({filter: `email_id:'${emailModel.id}'`});
+        assert.equal(batches.models.length, 4);
 
         // sort batches by id because findAll doesn't have order option
         batches.models.sort(sortBatches);
@@ -621,7 +425,7 @@ describe('Batch sending tests', function () {
         for (const batch of batches.models) {
             count += 1;
 
-            if (count === 5) {
+            if (count === 4) {
                 assert.equal(batch.get('provider_id'), null);
                 assert.equal(batch.get('status'), 'failed');
                 assert.equal(batch.get('error_status_code'), 500);
@@ -630,13 +434,7 @@ describe('Batch sending tests', function () {
                 assert.equal(errorData.error.status, 500);
                 assert.deepEqual(errorData.messageData.to.length, 1);
             } else {
-                if (count === 4) {
-                    // We sorted on provider_id so the count is slightly off
-                    assert.equal(batch.get('provider_id'), 'stubbed-email-id-5');
-                } else {
-                    assert.equal(batch.get('provider_id'), 'stubbed-email-id-' + count);
-                }
-
+                assert.equal(batch.get('provider_id'), 'stubbed-email-id-' + count);
                 assert.equal(batch.get('status'), 'submitted');
                 assert.equal(batch.get('error_status_code'), null);
                 assert.equal(batch.get('error_message'), null);
@@ -646,7 +444,7 @@ describe('Batch sending tests', function () {
             assert.equal(batch.get('member_segment'), null);
 
             // Did we create recipients?
-            const batchRecipients = await models.EmailRecipient.findAll({filter: `email_id:${emailModel.id}+batch_id:${batch.id}`});
+            const batchRecipients = await models.EmailRecipient.findAll({filter: `email_id:'${emailModel.id}'+batch_id:'${batch.id}'`});
             assert.equal(batchRecipients.models.length, 1);
 
             emailRecipients.push(...batchRecipients.models);
@@ -656,24 +454,24 @@ describe('Batch sending tests', function () {
         let memberIds = emailRecipients.map(recipient => recipient.get('member_id'));
         assert.equal(memberIds.length, _.uniq(memberIds).length);
 
-        await retryEmail(emailModel.id);
+        await retryEmail(agent, emailModel.id);
         await jobManager.allSettled();
 
         await emailModel.refresh();
-        batches = await models.EmailBatch.findAll({filter: `email_id:${emailModel.id}`});
+        batches = await models.EmailBatch.findAll({filter: `email_id:'${emailModel.id}'`});
 
         // sort batches by provider_id (nullable) because findAll doesn't have order option
         batches.models.sort(sortBatches);
 
         assert.equal(emailModel.get('status'), 'submitted');
-        assert.equal(emailModel.get('email_count'), 5);
+        assert.equal(emailModel.get('email_count'), 4);
 
         // Did we keep the batches?
-        batches = await models.EmailBatch.findAll({filter: `email_id:${emailModel.id}`});
+        batches = await models.EmailBatch.findAll({filter: `email_id:'${emailModel.id}'`});
 
         // sort batches by provider_id (nullable) because findAll doesn't have order option
         batches.models.sort(sortBatches);
-        assert.equal(batches.models.length, 5);
+        assert.equal(batches.models.length, 4);
 
         emailRecipients = [];
 
@@ -688,7 +486,7 @@ describe('Batch sending tests', function () {
             assert.equal(batch.get('error_data'), null);
 
             // Did we create recipients?
-            const batchRecipients = await models.EmailRecipient.findAll({filter: `email_id:${emailModel.id}+batch_id:${batch.id}`});
+            const batchRecipients = await models.EmailRecipient.findAll({filter: `email_id:'${emailModel.id}'+batch_id:'${batch.id}'`});
             assert.equal(batchRecipients.models.length, 1);
 
             emailRecipients.push(...batchRecipients.models);
@@ -755,22 +553,84 @@ describe('Batch sending tests', function () {
         await configUtils.restore();
     });
 
+    describe('Target Delivery Window', function () {
+        it('can send an email with a target delivery window set', async function () {
+            const t0 = new Date();
+            const targetDeliveryWindow = 240000; // 4 minutes
+            configUtils.set('bulkEmail:batchSize', 1);
+            configUtils.set('bulkEmail:targetDeliveryWindow', targetDeliveryWindow);
+            const {emailModel} = await sendEmail(agent);
+
+            assert.equal(emailModel.get('source_type'), 'lexical');
+            assert(emailModel.get('subject'));
+            assert(emailModel.get('from'));
+            assert.equal(emailModel.get('email_count'), 4);
+
+            // Did we create batches?
+            const batches = await models.EmailBatch.findAll({filter: `email_id:'${emailModel.id}'`});
+            assert.equal(batches.models.length, 4);
+
+            // Check all batches are in send state
+            for (const batch of batches.models) {
+                assert.equal(batch.get('provider_id'), 'stubbed-email-id');
+                assert.equal(batch.get('status'), 'submitted');
+                assert.equal(batch.get('member_segment'), null);
+
+                assert.equal(batch.get('error_status_code'), null);
+                assert.equal(batch.get('error_message'), null);
+                assert.equal(batch.get('error_data'), null);
+            }
+
+            // Did we create recipients?
+            const emailRecipients = await models.EmailRecipient.findAll({filter: `email_id:'${emailModel.id}'`});
+            assert.equal(emailRecipients.models.length, 4);
+
+            for (const recipient of emailRecipients.models) {
+                const batchId = recipient.get('batch_id');
+                assert.ok(batches.models.find(b => b.id === batchId));
+            }
+
+            // Check members are unique
+            const memberIds = emailRecipients.models.map(recipient => recipient.get('member_id'));
+            assert.equal(memberIds.length, _.uniq(memberIds).length);
+
+            assert.equal(stubbedSend.callCount, 4);
+            const calls = stubbedSend.getCalls();
+            const deadline = new Date(t0.getTime() + targetDeliveryWindow);
+
+            // Check that the emails were sent with the deliverytime
+            for (const call of calls) {
+                const options = call.args[1];
+                const deliveryTimeString = options['o:deliverytime'];
+                const deliveryTimeDate = new Date(Date.parse(deliveryTimeString));
+                assert.equal(typeof deliveryTimeString, 'string');
+                assert.ok(deliveryTimeDate.getTime() <= deadline.getTime());
+            }
+            configUtils.restore();
+        });
+    });
+
     describe('Analytics', function () {
         it('Adds link tracking to all links in a post', async function () {
-            const {emailModel, html, plaintext, recipientData} = await sendEmail();
+            const {emailModel, html, plaintext, recipientData} = await sendEmail(agent);
             const memberUuid = recipientData.uuid;
             const member = await models.Member.findOne({uuid: memberUuid});
 
             // Test if all links are replaced and contain the member id
             const cheerio = require('cheerio');
             const $ = cheerio.load(html);
-            const links = await linkRedirectRepository.getAll({filter: 'post_id:' + emailModel.get('post_id')});
+            const links = await linkRedirectRepository.getAll({filter: 'post_id:\'' + emailModel.get('post_id') + '\''});
 
             for (const el of $('a').toArray()) {
                 const href = $(el).attr('href');
 
                 if (href.includes('/unsubscribe/?uuid')) {
                     assert(href.includes('?uuid=' + memberUuid), 'Subscribe link need to contain uuid, got ' + href);
+                    continue;
+                }
+
+                if (href.includes('https://ghost.org/?via=pbg-newsletter')) {
+                    assert(!href.includes('?m=' + memberUuid), 'Powererd by Ghost link should not be tracked');
                     continue;
                 }
 
@@ -807,9 +667,9 @@ describe('Batch sending tests', function () {
         it('Does not add outbound refs if disabled', async function () {
             mockManager.mockSetting('outbound_link_tagging', false);
 
-            const {emailModel, html} = await sendEmail();
+            const {emailModel, html} = await sendEmail(agent);
             assert.match(html, /\m=/);
-            const links = await linkRedirectRepository.getAll({filter: 'post_id:' + emailModel.get('post_id')});
+            const links = await linkRedirectRepository.getAll({filter: 'post_id:\'' + emailModel.get('post_id') + '\''});
 
             for (const link of links) {
                 // Check ref not added to all replaced links
@@ -822,9 +682,9 @@ describe('Batch sending tests', function () {
             mockManager.mockLabsDisabled('outboundLinkTagging');
             mockManager.mockSetting('outbound_link_tagging', false);
 
-            const {emailModel, html} = await sendEmail();
+            const {emailModel, html} = await sendEmail(agent);
             assert.match(html, /\m=/);
-            const links = await linkRedirectRepository.getAll({filter: 'post_id:' + emailModel.get('post_id')});
+            const links = await linkRedirectRepository.getAll({filter: 'post_id:\'' + emailModel.get('post_id') + '\''});
 
             for (const link of links) {
                 // Check ref not added to all replaced links
@@ -835,9 +695,9 @@ describe('Batch sending tests', function () {
         it('Does not add link tracking if disabled', async function () {
             mockManager.mockSetting('email_track_clicks', false);
 
-            const {emailModel, html} = await sendEmail();
+            const {emailModel, html} = await sendEmail(agent);
             assert.doesNotMatch(html, /\m=/);
-            const links = await linkRedirectRepository.getAll({filter: 'post_id:' + emailModel.get('post_id')});
+            const links = await linkRedirectRepository.getAll({filter: 'post_id:\'' + emailModel.get('post_id') + '\''});
             assert.equal(links.length, 0);
         });
     });
@@ -850,10 +710,12 @@ describe('Batch sending tests', function () {
                 labels: [{name: 'replacements-tests'}],
                 newsletters: [{
                     id: fixtureManager.get('newsletters', 0).id
-                }]
+                }],
+                email_disabled: false,
+                created_at: '2024-10-11T23:45:54.000Z'
             });
 
-            const {html, plaintext} = await sendEmail({
+            const {html, plaintext} = await sendEmail(agent, {
                 mobiledoc: mobileDocWithReplacements
             }, 'label:replacements-tests');
 
@@ -864,18 +726,17 @@ describe('Batch sending tests', function () {
             assert.match(html, /Hey there, Hey ,/);
 
             // The unsubscribe link is replaced
-            assert.match(html, /<a href="http:\/\/127.0.0.1:2369\/unsubscribe\/\?uuid=[a-z0-9-]+&newsletter=[a-z0-9-]+"/, 'Unsubscribe link not found in html');
+            assert.match(html, /<a href="http:\/\/127.0.0.1:2369\/unsubscribe\/\?uuid=[a-z0-9-]+&key=[a-z0-9]+&newsletter=[a-z0-9-]+"/, 'Unsubscribe link not found in html');
 
             // Same for plaintext:
             assert.match(plaintext, /Hello {first_name},/);
             assert.match(plaintext, /Hey there, Hey ,/);
-            assert.match(plaintext, /\[http:\/\/127.0.0.1:2369\/unsubscribe\/\?uuid=[a-z0-9-]+&newsletter=[a-z0-9-]+\]/, 'Unsubscribe link not found in plaintext');
+            assert.match(plaintext, /\[http:\/\/127.0.0.1:2369\/unsubscribe\/\?uuid=[a-z0-9-]+&key=[a-z0-9]+&newsletter=[a-z0-9-]+\]/, 'Unsubscribe link not found in plaintext');
 
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
         });
 
         it('Does replace with and without fallback in both plaintext and html for member with name', async function () {
-            this.retries(1);
             // Create a new member without a first_name
             await models.Member.add({
                 name: 'Simon Tester',
@@ -883,10 +744,12 @@ describe('Batch sending tests', function () {
                 labels: [{name: 'replacements-tests-2'}],
                 newsletters: [{
                     id: fixtureManager.get('newsletters', 0).id
-                }]
+                }],
+                email_disabled: false,
+                created_at: '2024-10-11T23:45:54.000Z'
             });
 
-            const {html, plaintext} = await sendEmail({
+            const {html, plaintext} = await sendEmail(agent, {
                 mobiledoc: mobileDocWithReplacements
             }, 'label:replacements-tests-2');
 
@@ -897,20 +760,20 @@ describe('Batch sending tests', function () {
             assert.match(html, /Hey Simon, Hey Simon,/);
 
             // The unsubscribe link is replaced
-            assert.match(html, /<a href="http:\/\/127.0.0.1:2369\/unsubscribe\/\?uuid=[a-z0-9-]+&newsletter=[a-z0-9-]+"/, 'Unsubscribe link not found in html');
+            assert.match(html, /<a href="http:\/\/127.0.0.1:2369\/unsubscribe\/\?uuid=[a-z0-9-]+&key=[a-z0-9]+&newsletter=[a-z0-9-]+"/, 'Unsubscribe link not found in html');
 
             // Same for plaintext:
             assert.match(plaintext, /Hello {first_name},/);
             assert.match(plaintext, /Hey Simon, Hey Simon,/);
-            assert.match(plaintext, /\[http:\/\/127.0.0.1:2369\/unsubscribe\/\?uuid=[a-z0-9-]+&newsletter=[a-z0-9-]+\]/, 'Unsubscribe link not found in plaintext');
+            assert.match(plaintext, /\[http:\/\/127.0.0.1:2369\/unsubscribe\/\?uuid=[a-z0-9-]+&key=[a-z0-9]+&newsletter=[a-z0-9-]+\]/, 'Unsubscribe link not found in plaintext');
 
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
         });
     });
 
     describe('HTML-content', function () {
         it('Does not HTML escape feature_image_caption', async function () {
-            const {html, plaintext} = await sendEmail({
+            const {html, plaintext} = await sendEmail(agent, {
                 feature_image: 'https://example.com/image.jpg',
                 feature_image_caption: 'Testing <b>feature image caption</b>'
             });
@@ -920,7 +783,7 @@ describe('Batch sending tests', function () {
             // Check plaintext version dropped the bold tag
             assert.match(plaintext, /Testing feature image caption/);
 
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
         });
     });
 
@@ -929,7 +792,7 @@ describe('Batch sending tests', function () {
             const defaultNewsletter = await getDefaultNewsletter();
             await models.Newsletter.edit({show_post_title_section: false}, {id: defaultNewsletter.id});
 
-            const {html, plaintext} = await sendEmail({
+            const {html, plaintext} = await sendEmail(agent, {
                 title: 'This is a test post title',
                 mobiledoc: mobileDocExample
             });
@@ -938,13 +801,13 @@ describe('Batch sending tests', function () {
             const withoutTitleTag = html.replace(/<title>.*<\/title>/, '');
             assert.doesNotMatch(withoutTitleTag, /This is a test post title/);
             assert.doesNotMatch(plaintext, /This is a test post title/);
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
 
             // undo
             await models.Newsletter.edit({show_post_title_section: true}, {id: defaultNewsletter.id});
 
             // Check does contain post title section
-            const {html: html2, plaintext: plaintext2} = await sendEmail({
+            const {html: html2, plaintext: plaintext2} = await sendEmail(agent, {
                 title: 'This is a test post title',
                 mobiledoc: mobileDocExample
             });
@@ -952,10 +815,10 @@ describe('Batch sending tests', function () {
             const withoutTitleTag2 = html2.replace(/<title>.*<\/title>/, '');
             assert.match(withoutTitleTag2, /This is a test post title/);
             assert.match(plaintext2, /This is a test post title/);
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
         });
 
-        it('Shows 3 comment buttons for published posts without feedback enabled', async function () {
+        it('Shows 2 comment buttons for published posts without feedback enabled', async function () {
             mockSetting('comments_enabled', 'all');
             mockSetting('email_track_clicks', false); // Disable link replacement for this test
 
@@ -963,17 +826,17 @@ describe('Batch sending tests', function () {
             assert(defaultNewsletter.get('show_comment_cta'), 'show_comment_cta should be true for this test');
             assert(!defaultNewsletter.get('feedback_enabled'), 'feedback_enabled should be off for this test');
 
-            const {html} = await sendEmail({
+            const {html} = await sendEmail(agent, {
                 title: 'This is a test post title',
                 mobiledoc: mobileDocExample
             });
 
             // Currently the link is not present in plaintext version (because no text)
-            assert.equal(html.match(/#ghost-comments/g).length, 3, 'Every email should have 3 buttons to comments');
-            await lastEmailMatchSnapshot();
+            assert.equal(html.match(/#ghost-comments/g).length, 1, 'Every email should have 1 button to comments');
+            await matchEmailSnapshot();
         });
 
-        it('Shows 3 comment buttons for published posts with feedback enabled', async function () {
+        it('Shows 2 comment buttons for published posts with feedback enabled', async function () {
             mockSetting('comments_enabled', 'all');
             mockSetting('email_track_clicks', false); // Disable link replacement for this test
 
@@ -981,17 +844,19 @@ describe('Batch sending tests', function () {
             assert(defaultNewsletter.get('show_comment_cta'), 'show_comment_cta should be true for this test');
             await models.Newsletter.edit({feedback_enabled: true}, {id: defaultNewsletter.id});
 
-            const {html} = await sendEmail({
-                title: 'This is a test post title',
-                mobiledoc: mobileDocExample
-            });
+            try {
+                const {html} = await sendEmail(agent, {
+                    title: 'This is a test post title',
+                    mobiledoc: mobileDocExample
+                });
 
-            // Currently the link is not present in plaintext version (because no text)
-            assert.equal(html.match(/#ghost-comments/g).length, 3, 'Every email should have 3 buttons to comments');
-            await lastEmailMatchSnapshot();
-
-            // undo
-            await models.Newsletter.edit({feedback_enabled: false}, {id: defaultNewsletter.id});
+                // Currently the link is not present in plaintext version (because no text)
+                assert.equal(html.match(/#ghost-comments/g).length, 1, 'Every email should have 1 button to comments');
+                await matchEmailSnapshot();
+            } finally {
+                // undo
+                await models.Newsletter.edit({feedback_enabled: false}, {id: defaultNewsletter.id});
+            }
         });
 
         it('Hides comments button for email only posts', async function () {
@@ -1001,7 +866,7 @@ describe('Batch sending tests', function () {
             const defaultNewsletter = await getDefaultNewsletter();
             assert(defaultNewsletter.get('show_comment_cta'), 'show_comment_cta should be true for this test');
 
-            const {html} = await sendEmail({
+            const {html} = await sendEmail(agent, {
                 title: 'This is a test post title',
                 mobiledoc: mobileDocExample,
                 email_only: true
@@ -1009,7 +874,7 @@ describe('Batch sending tests', function () {
 
             // Check does not contain post title section
             assert.doesNotMatch(html, /#ghost-comments/);
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
         });
 
         it('Hides comments button if comments disabled', async function () {
@@ -1019,13 +884,13 @@ describe('Batch sending tests', function () {
             const defaultNewsletter = await getDefaultNewsletter();
             assert(defaultNewsletter.get('show_comment_cta'), 'show_comment_cta should be true for this test');
 
-            const {html} = await sendEmail({
+            const {html} = await sendEmail(agent, {
                 title: 'This is a test post title',
                 mobiledoc: mobileDocExample
             });
 
             assert.doesNotMatch(html, /#ghost-comments/);
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
         });
 
         it('Hides comments button if disabled in newsletter', async function () {
@@ -1035,27 +900,28 @@ describe('Batch sending tests', function () {
             const defaultNewsletter = await getDefaultNewsletter();
             await models.Newsletter.edit({show_comment_cta: false}, {id: defaultNewsletter.id});
 
-            const {html} = await sendEmail({
+            const {html} = await sendEmail(agent, {
                 title: 'This is a test post title',
                 mobiledoc: mobileDocExample
             });
 
             assert.doesNotMatch(html, /#ghost-comments/);
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
 
             // undo
             await models.Newsletter.edit({show_comment_cta: true}, {id: defaultNewsletter.id});
         });
 
         it('Shows subscription details box for free members', async function () {
-            this.retries(1);
             // Create a new member without a first_name
             await models.Member.add({
                 email: 'subscription-box-1@example.com',
                 labels: [{name: 'subscription-box-tests'}],
                 newsletters: [{
                     id: fixtureManager.get('newsletters', 0).id
-                }]
+                }],
+                email_disabled: false,
+                created_at: '2024-10-11T23:45:54.000Z'
             });
 
             mockSetting('email_track_clicks', false); // Disable link replacement for this test
@@ -1063,7 +929,7 @@ describe('Batch sending tests', function () {
             const defaultNewsletter = await getDefaultNewsletter();
             await models.Newsletter.edit({show_subscription_details: true}, {id: defaultNewsletter.id});
 
-            const {html, plaintext} = await sendEmail({
+            const {html, plaintext} = await sendEmail(agent, {
                 title: 'This is a test post title',
                 mobiledoc: mobileDocExample
             }, 'label:subscription-box-tests');
@@ -1074,7 +940,7 @@ describe('Batch sending tests', function () {
             // Check text matches
             assert.match(plaintext, /You are receiving this because you are a free subscriber to Ghost\./);
 
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
 
             // undo
             await models.Newsletter.edit({show_subscription_details: false}, {id: defaultNewsletter.id});
@@ -1088,7 +954,9 @@ describe('Batch sending tests', function () {
                 newsletters: [{
                     id: fixtureManager.get('newsletters', 0).id
                 }],
-                status: 'comped'
+                status: 'comped',
+                email_disabled: false,
+                created_at: '2024-10-11T23:45:54.000Z'
             });
 
             mockSetting('email_track_clicks', false); // Disable link replacement for this test
@@ -1096,7 +964,7 @@ describe('Batch sending tests', function () {
             const defaultNewsletter = await getDefaultNewsletter();
             await models.Newsletter.edit({show_subscription_details: true}, {id: defaultNewsletter.id});
 
-            const {html, plaintext} = await sendEmail({
+            const {html, plaintext} = await sendEmail(agent, {
                 title: 'This is a test post title',
                 mobiledoc: mobileDocExample
             }, 'label:subscription-box-comped-tests');
@@ -1107,7 +975,7 @@ describe('Batch sending tests', function () {
             // Check text matches
             assert.match(plaintext, /You are receiving this because you are a complimentary subscriber to Ghost\./);
 
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
 
             // undo
             await models.Newsletter.edit({show_subscription_details: false}, {id: defaultNewsletter.id});
@@ -1137,7 +1005,7 @@ describe('Batch sending tests', function () {
             const defaultNewsletter = await getDefaultNewsletter();
             await models.Newsletter.edit({show_subscription_details: true}, {id: defaultNewsletter.id});
 
-            const {html, plaintext} = await sendEmail({
+            const {html, plaintext} = await sendEmail(agent, {
                 title: 'This is a test post title',
                 mobiledoc: mobileDocExample
             }, 'label:subscription-box-trialing-tests');
@@ -1148,7 +1016,7 @@ describe('Batch sending tests', function () {
             // Check text matches
             assert.match(plaintext, /You are receiving this because you are a trialing subscriber to Ghost\. Your free trial ends on \d+ \w+ \d+, at which time you will be charged the regular price\. You can always cancel before then\./);
 
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
 
             // undo
             await models.Newsletter.edit({show_subscription_details: false}, {id: defaultNewsletter.id});
@@ -1178,7 +1046,7 @@ describe('Batch sending tests', function () {
             const defaultNewsletter = await getDefaultNewsletter();
             await models.Newsletter.edit({show_subscription_details: true}, {id: defaultNewsletter.id});
 
-            const {html, plaintext} = await sendEmail({
+            const {html, plaintext} = await sendEmail(agent, {
                 title: 'This is a test post title',
                 mobiledoc: mobileDocExample
             }, 'label:subscription-box-paid-tests');
@@ -1189,7 +1057,7 @@ describe('Batch sending tests', function () {
             // Check text matches
             assert.match(plaintext, /You are receiving this because you are a paid subscriber to Ghost\. Your subscription will renew on \d+ \w+ \d+\./);
 
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
 
             // undo
             await models.Newsletter.edit({show_subscription_details: false}, {id: defaultNewsletter.id});
@@ -1220,7 +1088,7 @@ describe('Batch sending tests', function () {
             const defaultNewsletter = await getDefaultNewsletter();
             await models.Newsletter.edit({show_subscription_details: true}, {id: defaultNewsletter.id});
 
-            const {html, plaintext} = await sendEmail({
+            const {html, plaintext} = await sendEmail(agent, {
                 title: 'This is a test post title',
                 mobiledoc: mobileDocExample
             }, 'label:subscription-box-canceled-tests');
@@ -1231,7 +1099,7 @@ describe('Batch sending tests', function () {
             // Check text matches
             assert.match(plaintext, /You are receiving this because you are a paid subscriber to Ghost\. Your subscription has been canceled and will expire on \d+ \w+ \d+\. You can resume your subscription via your account settings\./);
 
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
 
             // undo
             await models.Newsletter.edit({show_subscription_details: false}, {id: defaultNewsletter.id});
@@ -1241,7 +1109,7 @@ describe('Batch sending tests', function () {
             const defaultNewsletter = await getDefaultNewsletter();
             await models.Newsletter.edit({show_latest_posts: true}, {id: defaultNewsletter.id});
 
-            const {html} = await sendEmail({
+            const {html} = await sendEmail(agent, {
                 title: 'This is the main post title',
                 mobiledoc: mobileDocExample
             });
@@ -1252,7 +1120,7 @@ describe('Batch sending tests', function () {
             // Check count of title
             assert.equal(html.match(/This is the main post title/g).length, 2, 'Should only contain the title two times'); // otherwise post is in last 3 posts
 
-            await lastEmailMatchSnapshot();
+            await matchEmailSnapshot();
 
             // undo
             await models.Newsletter.edit({show_latest_posts: false}, {id: defaultNewsletter.id});

@@ -21,7 +21,7 @@ jobs:
               labels: ["migration"]
             })
 
-      - uses: peter-evans/create-or-update-comment@c470f6fd6d4e4aa68bdf7d16e7b5935bde5d01b5
+      - uses: peter-evans/create-or-update-comment@ac8e6509d7545ebc2e5e7c35eaa12195c2f77adc
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
@@ -30,14 +30,16 @@ jobs:
 
             ### General requirements
 
+            - [ ]  :warning: Tested on the staging database servers
             - [ ]  Satisfies idempotency requirement (both `up()` and `down()`)
             - [ ]  Does not reference models
-            - [ ]  Filename is in the correct format
+            - [ ]  Filename is in the correct format (and correctly ordered)
             - [ ]  Targets the next minor version
             - [ ]  All code paths have appropriate log messages
             - [ ]  Uses the correct utils
             - [ ]  Contains a minimal changeset
             - [ ]  Does not mix DDL/DML operations
+            - [ ]  Tested in MySQL and SQLite
 
             ### Schema changes
 

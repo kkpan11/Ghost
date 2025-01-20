@@ -7,6 +7,7 @@ type PostLike = {
     feature_image_alt: string | null;
     feature_image_caption: string | null;
     title: string;
+    custom_excerpt: string | null;
     reason: string;
     post_status: string;
 }
@@ -19,6 +20,7 @@ type Revision = {
     feature_image_alt: string | null;
     feature_image_caption: string | null;
     title: string;
+    custom_excerpt: string | null;
     post_status: string;
     reason: string;
     created_at_ts: number;
@@ -29,6 +31,7 @@ type PostRevisionsDeps = {
         max_revisions: number;
         revision_interval_ms: number;
     },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     model: any
 }
 
@@ -41,6 +44,7 @@ type RevisionResult = {
 
 export class PostRevisions {
     config: PostRevisionsDeps['config'];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     model: any;
 
     constructor(deps: PostRevisionsDeps) {
@@ -69,8 +73,9 @@ export class PostRevisions {
         const featuredImagedHasChanged = latestRevision.feature_image !== current.feature_image;
         const lexicalHasChanged = latestRevision.lexical !== current.lexical;
         const titleHasChanged = latestRevision.title !== current.title;
+        const customExcerptHasChanged = latestRevision.custom_excerpt !== current.custom_excerpt;
         // CASE: we only want to save a revision if something has changed since the previous revision
-        if (lexicalHasChanged || titleHasChanged || featuredImagedHasChanged) {
+        if (lexicalHasChanged || titleHasChanged || featuredImagedHasChanged || customExcerptHasChanged) {
             // CASE: user has explicitly requested a revision by hitting cmd+s or leaving the editor
             if (forceRevision) {
                 return {value: true, reason: 'explicit_save'};
@@ -117,14 +122,16 @@ export class PostRevisions {
             feature_image_alt: input.feature_image_alt,
             feature_image_caption: input.feature_image_caption,
             title: input.title,
+            custom_excerpt: input.custom_excerpt,
             reason: input.reason,
             post_status: input.post_status
         };
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async removeAuthorFromRevisions(authorId: string, options: any): Promise<void> {
         const revisions = await this.model.findAll({
-            filter: `author_id:${authorId}`,
+            filter: `author_id:'${authorId}'`,
             columns: ['id'],
             transacting: options.transacting
         });

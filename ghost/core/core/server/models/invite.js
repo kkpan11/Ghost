@@ -1,4 +1,3 @@
-const Promise = require('bluebird');
 const _ = require('lodash');
 const tpl = require('@tryghost/tpl');
 const errors = require('@tryghost/errors');
@@ -94,8 +93,7 @@ Invite = ghostBookshelf.Model.extend({
                     } else if (_.some(loadedPermissions.user.roles, {name: 'Editor'})) {
                         allowed = ['Author', 'Contributor'];
                     }
-                }
-                if (loadedPermissions.apiKey) {
+                } else if (loadedPermissions.apiKey) {
                     allowed = ['Editor', 'Author', 'Contributor'];
                 }
 

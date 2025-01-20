@@ -21,16 +21,20 @@ const messages = {
         context: 'Too many login attempts.'
     },
     tooManyAttempts: 'Too many attempts.',
-    webmentionsBlock: 'Too many mention attempts'
+    webmentionsBlock: 'Too many mention attempts',
+    emailPreviewBlock: 'Only 10 test emails can be sent per hour'
 };
 let spamPrivateBlock = spam.private_block || {};
 let spamGlobalBlock = spam.global_block || {};
 let spamGlobalReset = spam.global_reset || {};
 let spamUserReset = spam.user_reset || {};
 let spamUserLogin = spam.user_login || {};
+let spamSendVerificationCode = spam.send_verification_code || {};
+let spamUserVerification = spam.user_verification || {};
 let spamMemberLogin = spam.member_login || {};
 let spamContentApiKey = spam.content_api_key || {};
 let spamWebmentionsBlock = spam.webmentions_block || {};
+let spamEmailPreviewBlock = spam.email_preview_block || {};
 
 let store;
 let memoryStore;
@@ -42,7 +46,10 @@ let userLoginInstance;
 let membersAuthInstance;
 let membersAuthEnumerationInstance;
 let userResetInstance;
+let sendVerificationCodeInstance;
+let userVerificationInstance;
 let contentApiKeyInstance;
+let emailPreviewBlockInstance;
 
 const spamConfigKeys = ['freeRetries', 'minWait', 'maxWait', 'lifetime'];
 
@@ -152,6 +159,32 @@ const webmentionsBlock = () => {
     return webmentionsBlockInstance;
 };
 
+const emailPreviewBlock = () => {
+    const ExpressBrute = require('express-brute');
+    const BruteKnex = require('brute-knex');
+    const db = require('../../../../data/db');
+
+    store = store || new BruteKnex({
+        tablename: 'brute',
+        createTable: false,
+        knex: db.knex
+    });
+
+    emailPreviewBlockInstance = emailPreviewBlockInstance || new ExpressBrute(store,
+        extend({
+            attachResetToRequest: false,
+            failCallback(req, res, next) {
+                return next(new errors.TooManyRequestsError({
+                    message: messages.emailPreviewBlock
+                }));
+            },
+            handleStoreError: handleStoreError
+        }, pick(spamEmailPreviewBlock, spamConfigKeys))
+    );
+
+    return emailPreviewBlockInstance;
+};
+
 const membersAuth = () => {
     const ExpressBrute = require('express-brute');
     const BruteKnex = require('brute-knex');
@@ -202,7 +235,7 @@ const membersAuthEnumeration = () => {
                 attachResetToRequest: true,
                 failCallback(req, res, next, nextValidRequestDate) {
                     return next(new errors.TooManyRequestsError({
-                        message: `Too many different sign-in attempts try again in ${moment(nextValidRequestDate).fromNow(true)}`,
+                        message: `Too many different sign-in attempts, try again in ${moment(nextValidRequestDate).fromNow(true)}`,
                         context: tpl(messages.tooManySigninAttempts.context),
                         help: tpl(messages.tooManySigninAttempts.context)
                     }));
@@ -279,6 +312,58 @@ const userReset = function userReset() {
     return userResetInstance;
 };
 
+const userVerification = function userVerification() {
+    const ExpressBrute = require('express-brute');
+    const BruteKnex = require('brute-knex');
+    const db = require('../../../../data/db');
+
+    store = store || new BruteKnex({
+        tablename: 'brute',
+        createTable: false,
+        knex: db.knex
+    });
+
+    userVerificationInstance = userVerificationInstance || new ExpressBrute(store,
+        extend({
+            attachResetToRequest: true,
+            failCallback(req, res, next) {
+                return next(new errors.TooManyRequestsError({
+                    message: tpl(messages.tooManyAttempts)
+                }));
+            },
+            handleStoreError: handleStoreError
+        }, pick(spamUserVerification, spamConfigKeys))
+    );
+
+    return userVerificationInstance;
+};
+
+const sendVerificationCode = function sendVerificationCode() {
+    const ExpressBrute = require('express-brute');
+    const BruteKnex = require('brute-knex');
+    const db = require('../../../../data/db');
+
+    store = store || new BruteKnex({
+        tablename: 'brute',
+        createTable: false,
+        knex: db.knex
+    });
+
+    sendVerificationCodeInstance = sendVerificationCodeInstance || new ExpressBrute(store,
+        extend({
+            attachResetToRequest: true,
+            failCallback(req, res, next) {
+                return next(new errors.TooManyRequestsError({
+                    message: tpl(messages.tooManyAttempts)
+                }));
+            },
+            handleStoreError: handleStoreError
+        }, pick(spamSendVerificationCode, spamConfigKeys))
+    );
+
+    return sendVerificationCodeInstance;
+};
+
 // This protects a private blog from spam attacks. The defaults here allow 10 attempts per IP per hour
 // The endpoint is then locked for an hour
 const privateBlog = () => {
@@ -343,12 +428,15 @@ module.exports = {
     globalBlock: globalBlock,
     globalReset: globalReset,
     userLogin: userLogin,
+    sendVerificationCode: sendVerificationCode,
+    userVerification: userVerification,
     membersAuth: membersAuth,
     membersAuthEnumeration: membersAuthEnumeration,
     userReset: userReset,
     privateBlog: privateBlog,
     contentApiKey: contentApiKey,
     webmentionsBlock: webmentionsBlock,
+    emailPreviewBlock: emailPreviewBlock,
     reset: () => {
         store = undefined;
         memoryStore = undefined;
@@ -359,6 +447,8 @@ module.exports = {
         membersAuthInstance = undefined;
         membersAuthEnumerationInstance = undefined;
         userResetInstance = undefined;
+        sendVerificationCodeInstance = undefined;
+        userVerificationInstance = undefined;
         contentApiKeyInstance = undefined;
 
         spam = config.get('spam') || {};
@@ -367,6 +457,8 @@ module.exports = {
         spamGlobalReset = spam.global_reset || {};
         spamUserReset = spam.user_reset || {};
         spamUserLogin = spam.user_login || {};
+        spamSendVerificationCode = spam.send_verification_code || {};
+        spamUserVerification = spam.user_verification || {};
         spamMemberLogin = spam.member_login || {};
         spamContentApiKey = spam.content_api_key || {};
     }

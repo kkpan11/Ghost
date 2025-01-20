@@ -1,5 +1,4 @@
 /* eslint-disable ghost/filenames/match-regex */
-const Promise = require('bluebird');
 const validator = require('@tryghost/validator');
 const debug = require('@tryghost/debug')('api:endpoints:utils:validators:input:passwordreset');
 const tpl = require('@tryghost/tpl');
@@ -26,7 +25,7 @@ module.exports = {
     generateResetToken(apiConfig, frame) {
         debug('generateResetToken');
 
-        const email = frame.data.password_reset[0].email;
+        const email = frame.data.password_reset?.[0]?.email;
 
         if (typeof email !== 'string' || !validator.isEmail(email)) {
             throw new errors.BadRequestError({

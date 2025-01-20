@@ -1,4 +1,3 @@
-import React from 'react';
 import App from '../App.js';
 import {fireEvent, appRender, within} from '../utils/test-utils';
 import {site as FixtureSite} from '../utils/test-fixtures';
@@ -15,6 +14,10 @@ const setup = async ({site, member = null}) => {
 
     ghostApi.member.sendMagicLink = jest.fn(() => {
         return Promise.resolve('success');
+    });
+
+    ghostApi.member.getIntegrityToken = jest.fn(() => {
+        return Promise.resolve('testtoken');
     });
 
     ghostApi.member.checkoutPlan = jest.fn(() => {
@@ -66,6 +69,10 @@ const multiTierSetup = async ({site, member = null}) => {
 
     ghostApi.member.sendMagicLink = jest.fn(() => {
         return Promise.resolve('success');
+    });
+
+    ghostApi.member.getIntegrityToken = jest.fn(() => {
+        return Promise.resolve(`testtoken`);
     });
 
     ghostApi.member.checkoutPlan = jest.fn(() => {
@@ -140,13 +147,15 @@ describe('Signin', () => {
             expect(emailInput).toHaveValue('jamie@example.com');
 
             fireEvent.click(submitButton);
-            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
-                email: 'jamie@example.com',
-                emailType: 'signin'
-            });
 
             const magicLink = await within(popupIframeDocument).findByText(/Now check your email/i);
             expect(magicLink).toBeInTheDocument();
+
+            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
+                email: 'jamie@example.com',
+                emailType: 'signin',
+                integrityToken: 'testtoken'
+            });
         });
 
         test('without name field', async () => {
@@ -166,13 +175,15 @@ describe('Signin', () => {
             expect(emailInput).toHaveValue('jamie@example.com');
 
             fireEvent.click(submitButton);
-            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
-                email: 'jamie@example.com',
-                emailType: 'signin'
-            });
 
             const magicLink = await within(popupIframeDocument).findByText(/Now check your email/i);
             expect(magicLink).toBeInTheDocument();
+
+            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
+                email: 'jamie@example.com',
+                emailType: 'signin',
+                integrityToken: 'testtoken'
+            });
         });
 
         test('with only free plan', async () => {
@@ -192,13 +203,15 @@ describe('Signin', () => {
             expect(emailInput).toHaveValue('jamie@example.com');
 
             fireEvent.click(submitButton);
-            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
-                email: 'jamie@example.com',
-                emailType: 'signin'
-            });
 
             const magicLink = await within(popupIframeDocument).findByText(/Now check your email/i);
             expect(magicLink).toBeInTheDocument();
+
+            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
+                email: 'jamie@example.com',
+                emailType: 'signin',
+                integrityToken: 'testtoken'
+            });
         });
     });
 });
@@ -232,13 +245,15 @@ describe('Signin', () => {
             expect(emailInput).toHaveValue('jamie@example.com');
 
             fireEvent.click(submitButton);
-            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
-                email: 'jamie@example.com',
-                emailType: 'signin'
-            });
 
             const magicLink = await within(popupIframeDocument).findByText(/Now check your email/i);
             expect(magicLink).toBeInTheDocument();
+
+            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
+                email: 'jamie@example.com',
+                emailType: 'signin',
+                integrityToken: 'testtoken'
+            });
         });
 
         test('without name field', async () => {
@@ -258,13 +273,15 @@ describe('Signin', () => {
             expect(emailInput).toHaveValue('jamie@example.com');
 
             fireEvent.click(submitButton);
-            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
-                email: 'jamie@example.com',
-                emailType: 'signin'
-            });
 
             const magicLink = await within(popupIframeDocument).findByText(/Now check your email/i);
             expect(magicLink).toBeInTheDocument();
+
+            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
+                email: 'jamie@example.com',
+                emailType: 'signin',
+                integrityToken: 'testtoken'
+            });
         });
 
         test('with only free plan available', async () => {
@@ -284,13 +301,15 @@ describe('Signin', () => {
             expect(emailInput).toHaveValue('jamie@example.com');
 
             fireEvent.click(submitButton);
-            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
-                email: 'jamie@example.com',
-                emailType: 'signin'
-            });
 
             const magicLink = await within(popupIframeDocument).findByText(/Now check your email/i);
             expect(magicLink).toBeInTheDocument();
+
+            expect(ghostApi.member.sendMagicLink).toHaveBeenLastCalledWith({
+                email: 'jamie@example.com',
+                emailType: 'signin',
+                integrityToken: 'testtoken'
+            });
         });
     });
 });

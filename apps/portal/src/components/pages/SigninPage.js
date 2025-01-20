@@ -5,6 +5,8 @@ import CloseButton from '../common/CloseButton';
 import AppContext from '../../AppContext';
 import InputForm from '../common/InputForm';
 import {ValidateInputForm} from '../../utils/form';
+import {hasAvailablePrices, isSigninAllowed, isSignupAllowed} from '../../utils/helpers';
+import {ReactComponent as InvitationIcon} from '../../images/icons/invitation.svg';
 
 export default class SigninPage extends React.Component {
     static contextType = AppContext;
@@ -29,14 +31,14 @@ export default class SigninPage extends React.Component {
         e.preventDefault();
         this.setState((state) => {
             return {
-                errors: ValidateInputForm({fields: this.getInputFields({state})})
+                errors: ValidateInputForm({fields: this.getInputFields({state}), t: this.context.t})
             };
         }, async () => {
-            const {email, errors} = this.state;
+            const {email, phonenumber, errors} = this.state;
             const {redirect} = this.context.pageData ?? {};
             const hasFormErrors = (errors && Object.values(errors).filter(d => !!d).length > 0);
             if (!hasFormErrors) {
-                this.context.onAction('signin', {email, redirect});
+                this.context.onAction('signin', {email, phonenumber, redirect});
             }
         });
     }
@@ -69,6 +71,18 @@ export default class SigninPage extends React.Component {
                 required: true,
                 errorMessage: errors.email || '',
                 autoFocus: true
+            },
+            {
+                type: 'text',
+                value: state.phonenumber,
+                placeholder: '+1 (123) 456-7890',
+                // Doesn't need translation, hidden field
+                label: 'Phone number',
+                name: 'phonenumber',
+                required: false,
+                tabindex: -1,
+                autocomplete: 'off',
+                hidden: true
             }
         ];
         return fields;
@@ -116,6 +130,24 @@ export default class SigninPage extends React.Component {
     }
 
     renderForm() {
+        const {site, t} = this.context;
+        const isSignupAvailable = isSignupAllowed({site}) && hasAvailablePrices({site});
+
+        if (!isSigninAllowed({site})) {
+            return (
+                <section>
+                    <div className='gh-portal-section'>
+                        <p
+                            className='gh-portal-members-disabled-notification'
+                            data-testid="members-disabled-notification-text"
+                        >
+                            {t('Memberships unavailable, contact the owner for access.')}
+                        </p>
+                    </div>
+                </section>
+            );
+        }
+
         return (
             <section>
                 <div className='gh-portal-section'>
@@ -125,32 +157,52 @@ export default class SigninPage extends React.Component {
                         onKeyDown={(e, field) => this.onKeyDown(e, field)}
                     />
                 </div>
+                <footer className='gh-portal-signin-footer'>
+                    {this.renderSubmitButton()}
+                    {isSignupAvailable && this.renderSignupMessage()}
+                </footer>
             </section>
         );
     }
 
-    renderSiteLogo() {
-        const siteLogo = this.context.site.icon;
+    renderSiteIcon() {
+        const iconStyle = {};
+        const {site} = this.context;
+        const siteIcon = site.icon;
 
-        const logoStyle = {};
-
-        if (siteLogo) {
-            logoStyle.backgroundImage = `url(${siteLogo})`;
+        if (siteIcon) {
+            iconStyle.backgroundImage = `url(${siteIcon})`;
             return (
-                <img className='gh-portal-signup-logo' src={siteLogo} alt={this.context.site.title} />
+                <img className='gh-portal-signup-logo' src={siteIcon} alt={this.context.site.title} />
+            );
+        } else if (!isSigninAllowed({site})) {
+            return (
+                <InvitationIcon className='gh-portal-icon gh-portal-icon-invitation' />
             );
         }
         return null;
     }
 
-    renderFormHeader() {
-        // const siteTitle = this.context.site.title || 'Site Title';
-        const {t} = this.context;
+    renderSiteTitle() {
+        const {site, t} = this.context;
+        const siteTitle = site.title;
 
+        if (!isSigninAllowed({site})) {
+            return (
+                <h1 className='gh-portal-main-title'>{siteTitle}</h1>
+            );
+        } else {
+            return (
+                <h1 className='gh-portal-main-title'>{t('Sign in')}</h1>
+            );
+        }
+    }
+
+    renderFormHeader() {
         return (
             <header className='gh-portal-signin-header'>
-                {this.renderSiteLogo()}
-                <h1 className="gh-portal-main-title">{t('Sign in')}</h1>
+                {this.renderSiteIcon()}
+                {this.renderSiteTitle()}
             </header>
         );
     }
@@ -158,19 +210,12 @@ export default class SigninPage extends React.Component {
     render() {
         return (
             <>
-                {/* <div className='gh-portal-back-sitetitle'>
-                    <SiteTitleBackButton />
-                </div> */}
                 <CloseButton />
                 <div className='gh-portal-logged-out-form-container'>
                     <div className='gh-portal-content signin'>
                         {this.renderFormHeader()}
                         {this.renderForm()}
                     </div>
-                    <footer className='gh-portal-signin-footer'>
-                        {this.renderSubmitButton()}
-                        {this.renderSignupMessage()}
-                    </footer>
                 </div>
             </>
         );

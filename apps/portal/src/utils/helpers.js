@@ -86,13 +86,18 @@ export function getNewsletterFromUuid({site, uuid}) {
     });
 }
 
+export function hasNewsletterSendingEnabled({site}) {
+    return site?.editor_default_email_recipients === 'visibility';
+}
+
 export function allowCompMemberUpgrade({member}) {
     return member?.subscriptions?.[0]?.tier?.expiry_at !== undefined;
 }
 
 export function getCompExpiry({member}) {
-    if (member?.subscriptions?.[0]?.tier?.expiry_at) {
-        return getDateString(member.subscriptions[0].tier.expiry_at);
+    const subscription = getMemberSubscription({member});
+    if (subscription?.tier?.expiry_at) {
+        return getDateString(subscription.tier.expiry_at);
     }
     return '';
 }
@@ -135,6 +140,15 @@ export function getPriceFromSubscription({subscription}) {
 export function getMemberActivePrice({member}) {
     const subscription = getMemberSubscription({member});
     return getPriceFromSubscription({subscription});
+}
+
+export function getMemberActiveProduct({member, site}) {
+    const subscription = getMemberSubscription({member});
+    const price = getPriceFromSubscription({subscription});
+    const allProducts = getAllProductsForSite({site});
+    return allProducts.find((product) => {
+        return product.id === price?.product.product_id;
+    });
 }
 
 export function isMemberActivePrice({priceId, site, member}) {
@@ -224,9 +238,36 @@ export function capitalize(str) {
     return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-export function isInviteOnlySite({site = {}, pageQuery = ''}) {
+export function isPaidMembersOnly({site}) {
+    return site?.members_signup_access === 'paid';
+}
+
+export function isInviteOnly({site = {}}) {
+    return site?.members_signup_access === 'invite';
+}
+
+export function hasAvailablePrices({site = {}, pageQuery = ''}) {
     const prices = getSitePrices({site, pageQuery});
-    return prices.length === 0 || (site && site.members_signup_access === 'invite');
+    return prices.length > 0;
+}
+
+export function hasRecommendations({site}) {
+    return site?.recommendations_enabled === true;
+}
+
+export function isSigninAllowed({site}) {
+    return site?.members_signup_access !== 'none';
+}
+
+export function isSignupAllowed({site}) {
+    const hasSignupAccess = site?.members_signup_access === 'all' || site?.members_signup_access === 'paid';
+    const hasSignupConfigured = site?.is_stripe_configured || hasOnlyFreePlan({site});
+
+    return hasSignupAccess && hasSignupConfigured;
+}
+
+export function isFreeSignupAllowed({site}) {
+    return site?.members_signup_access === 'all';
 }
 
 export function hasMultipleProducts({site}) {
@@ -236,6 +277,11 @@ export function hasMultipleProducts({site}) {
         return true;
     }
     return false;
+}
+
+export function getRefDomain() {
+    const referrerSource = window.location.hostname.replace(/^www\./, '');
+    return referrerSource;
 }
 
 export function hasMultipleProductsFeature({site}) {
@@ -266,32 +312,6 @@ export function transformApiSiteData({site}) {
         });
 
         site.is_stripe_configured = !!site.paid_members_enabled;
-        site.members_signup_access = 'all';
-
-        if (!site.members_enabled) {
-            site.members_signup_access = 'none';
-        }
-
-        if (site.members_invite_only) {
-            site.members_signup_access = 'invite';
-        }
-
-        site.allow_self_signup = false;
-
-        if (site.members_signup_access !== 'all') {
-            site.allow_self_signup = false;
-        }
-
-        // if stripe is not connected then selected plans mean nothing.
-        // disabling signup would be done by switching to "invite only" mode
-        if (site.paid_members_enabled) {
-            site.allow_self_signup = true;
-        }
-
-        // self signup must be available for free plan signup to work
-        if (site.portal_plans?.includes('free')) {
-            site.allow_self_signup = true;
-        }
 
         // Map tier visibility to old settings
         if (site.products?.[0]?.visibility) {
@@ -398,20 +418,21 @@ export function hasBenefits({prices, site}) {
 
 export function getSiteProducts({site, pageQuery}) {
     const products = getAvailableProducts({site});
-    const showOnlyFree = pageQuery === 'free' && hasFreeProductPrice({site});
+    const showOnlyFree = pageQuery === 'free';
     if (showOnlyFree) {
         return [];
     }
     if (hasFreeProductPrice({site})) {
         products.unshift({
-            id: 'free'
+            id: 'free',
+            type: 'free'
         });
     }
     return products;
 }
 
-export function hasFreeTrialTier({site}) {
-    const tiers = getSiteProducts({site});
+export function hasFreeTrialTier({site, pageQuery}) {
+    const tiers = getSiteProducts({site, pageQuery});
     return tiers.some((tier) => {
         return !!tier?.trial_days;
     });
@@ -423,11 +444,8 @@ export function getFreeProductBenefits({site}) {
 }
 
 export function getFreeTierTitle({site}) {
-    if (hasOnlyFreeProduct({site})) {
-        return 'Free membership';
-    } else {
-        return 'Free';
-    }
+    const freeProduct = getFreeProduct({site});
+    return freeProduct?.name || 'Free';
 }
 
 export function getFreeTierDescription({site}) {
@@ -444,7 +462,7 @@ export function freeHasBenefitsOrDescription({site}) {
     return false;
 }
 
-export function getProductBenefits({product, site = null}) {
+export function getProductBenefits({product}) {
     if (product?.monthlyPrice && product?.yearlyPrice) {
         const productBenefits = product?.benefits || [];
         const monthlyBenefits = productBenefits;
@@ -478,11 +496,9 @@ export function getPricesFromProducts({site = null, products = null}) {
 }
 
 export function hasFreeProductPrice({site}) {
-    const {
-        allow_self_signup: allowSelfSignup,
-        portal_plans: portalPlans
-    } = site || {};
-    return allowSelfSignup && portalPlans.includes('free');
+    const {portal_plans: portalPlans} = site || {};
+
+    return isFreeSignupAllowed({site}) && portalPlans.includes('free');
 }
 
 export function getSiteNewsletters({site}) {
@@ -529,15 +545,7 @@ export function subscriptionHasFreeTrial({sub} = {}) {
 }
 
 export function isInThePast(date) {
-    const today = new Date();
-
-    // 👇️ OPTIONAL!
-    // This line sets the hour of the current date to midnight
-    // so the comparison only returns `true` if the passed in date
-    // is at least yesterday
-    today.setHours(0, 0, 0, 0);
-
-    return date < today;
+    return date < new Date();
 }
 
 export function getProductFromPrice({site, priceId}) {
@@ -625,14 +633,9 @@ export function getFreePriceCurrency({site}) {
 }
 
 export function getSitePrices({site = {}, pageQuery = ''} = {}) {
-    const {
-        allow_self_signup: allowSelfSignup,
-        portal_plans: portalPlans
-    } = site || {};
-
     const plansData = [];
 
-    if (allowSelfSignup && portalPlans.includes('free')) {
+    if (hasFreeProductPrice({site})) {
         const freePriceCurrencyDetail = getFreePriceCurrency({site});
         plansData.push({
             id: 'free',
@@ -652,6 +655,7 @@ export function getSitePrices({site = {}, pageQuery = ''} = {}) {
             plansData.push(price);
         });
     }
+
     return plansData;
 }
 
@@ -681,27 +685,42 @@ export const getMemberName = ({member}) => {
 };
 
 export const getSupportAddress = ({site}) => {
-    const {members_support_address: supportAddress} = site || {};
+    const {members_support_address: oldSupportAddress, support_email_address: supportAddress} = site || {};
 
-    if (supportAddress?.indexOf('@') < 0) {
-        const siteDomain = getSiteDomain({site});
-        const updatedDomain = siteDomain?.replace(/^(www)\.(?=[^/]*\..{2,5})/, '') || '';
-        return `${supportAddress}@${updatedDomain}`;
+    // If available, use the calculated setting support_email_address
+    if (supportAddress) {
+        return supportAddress;
     }
 
-    if (supportAddress?.split('@')?.length > 1) {
-        const [recipient, domain] = supportAddress.split('@');
+    // Deprecated: use the saved setting members_support_address
+    if (oldSupportAddress?.indexOf('@') < 0) {
+        const siteDomain = getSiteDomain({site});
+        const updatedDomain = siteDomain?.replace(/^(www)\.(?=[^/]*\..{2,5})/, '') || '';
+        return `${oldSupportAddress}@${updatedDomain}`;
+    }
+
+    if (oldSupportAddress?.split('@')?.length > 1) {
+        const [recipient, domain] = oldSupportAddress.split('@');
         const updatedDomain = domain?.replace(/^(www)\.(?=[^/]*\..{2,5})/, '') || '';
         return `${recipient}@${updatedDomain}`;
     }
-    return supportAddress || '';
+
+    return oldSupportAddress || '';
 };
 
 export const getDefaultNewsletterSender = ({site}) => {
+    const {default_email_address: defaultEmailAddress} = site || {};
+
+    // If available, use the calculated setting default_email_address as default
+    const defaultAddress = defaultEmailAddress || `noreply@${getSiteDomain({site})}`;
+
     const newsletters = getSiteNewsletters({site});
     const defaultNewsletter = newsletters?.[0];
-    if (defaultNewsletter) {
-        return defaultNewsletter.sender_email || `noreply@${getSiteDomain({site})}`;
+
+    if (defaultNewsletter && defaultNewsletter.sender_email) {
+        return defaultNewsletter.sender_email;
+    } else {
+        return defaultAddress;
     }
 };
 

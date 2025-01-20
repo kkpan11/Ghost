@@ -1,5 +1,5 @@
 import AppContext from '../../AppContext';
-import React, {useContext, useState} from 'react';
+import {useContext, useState} from 'react';
 import Switch from '../common/Switch';
 import {getSiteNewsletters, hasOnlyFreePlan} from '../../utils/helpers';
 import ActionButton from '../common/ActionButton';
@@ -11,19 +11,19 @@ function NewsletterPrefSection({newsletter, subscribedNewsletters, setSubscribed
     });
     if (newsletter.paid) {
         return (
-            <section className='gh-portal-list-toggle-wrapper' data-test-toggle-wrapper>
+            <section className='gh-portal-list-toggle-wrapper' data-testid="toggle-wrapper">
                 <div className='gh-portal-list-detail gh-portal-list-big'>
                     <h3>{newsletter.name}</h3>
                     <p>{newsletter.description}</p>
                 </div>
-                <div class="gh-portal-lock-icon-container">
+                <div className="gh-portal-lock-icon-container">
                     <LockIcon className='gh-portal-lock-icon' alt='' title={t('Unlock access to all newsletters by becoming a paid subscriber.')} />
                 </div>
             </section>
         );
     }
     return (
-        <section className='gh-portal-list-toggle-wrapper' data-test-toggle-wrapper>
+        <section className='gh-portal-list-toggle-wrapper' data-testid="toggle-wrapper">
             <div className='gh-portal-list-detail gh-portal-list-big'>
                 <h3>{newsletter.name}</h3>
                 <p>{newsletter.description}</p>
@@ -103,14 +103,14 @@ export default function NewsletterSelectionPage({pageData, onBack}) {
                             isRunning={isRunning}
                             retry={retry}
                             disabled={disabled}
-                            onClick={(e) => {
+                            onClick={() => {
                                 let newsletters = subscribedNewsletters.map((d) => {
                                     return {
                                         id: d.id
                                     };
                                 });
-                                const {name, email, plan, offerId} = pageData;
-                                onAction('signup', {name, email, plan, newsletters, offerId});
+                                const {name, email, plan, phonenumber, offerId} = pageData;
+                                onAction('signup', {name, email, plan, phonenumber, newsletters, offerId});
                             }}
                             brandColor={brandColor}
                             label={label}

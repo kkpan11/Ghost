@@ -1,4 +1,3 @@
-const Promise = require('bluebird');
 const tpl = require('@tryghost/tpl');
 const errors = require('@tryghost/errors');
 const invites = require('../../services/invites');
@@ -11,7 +10,8 @@ const messages = {
     inviteNotFound: 'Invite not found.'
 };
 
-module.exports = {
+/** @type {import('@tryghost/api-framework').Controller} */
+const controller = {
     docName: 'invites',
 
     browse: {
@@ -128,3 +128,5 @@ module.exports = {
         }
     }
 };
+
+module.exports = controller;

@@ -15,10 +15,11 @@ let emailCount = 0;
 
 // Mockable services
 const mailService = require('../../core/server/services/mail/index');
-const originalMailServiceSend = mailService.GhostMailer.prototype.send;
+const originalMailServiceSendMail = mailService.GhostMailer.prototype.sendMail;
 const labs = require('../../core/shared/labs');
 const events = require('../../core/server/lib/common/events');
 const settingsCache = require('../../core/shared/settings-cache');
+const limitService = require('../../core/server/services/limits');
 const dns = require('dns');
 const dnsPromises = dns.promises;
 const StripeMocker = require('./stripe-mocker');
@@ -78,8 +79,28 @@ const allowStripe = () => {
     allowedNetworkDomains.push('stripe.com');
 };
 
+const mockGeojs = () => {
+    disableNetwork();
+
+    nock(/get\.geojs\.io/)
+        .persist()
+        .get('/v1/ip/geo/127.0.0.1.json')
+        .reply(200, {
+            latitude: 'nil',
+            longitude: 'nil',
+            organization_name: 'Unknown',
+            ip: '127.0.0.1',
+            asn: 64512,
+            organization: 'AS64512 Unknown',
+            area_code: '0'
+        }, {
+            'Response-Type': 'application/json'
+        });
+};
+
 const mockStripe = () => {
     disableNetwork();
+    stripeMocker.reset();
     stripeMocker.stub();
 };
 
@@ -105,19 +126,24 @@ const mockMail = (response = 'Mail is disabled') => {
         sendResponse: response
     });
 
-    mailService.GhostMailer.prototype.send = mockMailReceiver.send.bind(mockMailReceiver);
-    mocks.mail = sinon.spy(mailService.GhostMailer.prototype, 'send');
+    mailService.GhostMailer.prototype.sendMail = mockMailReceiver.send.bind(mockMailReceiver);
+    mocks.mail = sinon.spy(mailService.GhostMailer.prototype, 'sendMail');
     mocks.mockMailReceiver = mockMailReceiver;
 
     return mockMailReceiver;
 };
+
+/**
+ * A reference to the send method when MailGun is mocked (required for some tests)
+ */
+let mailgunCreateMessageStub;
 
 const mockMailgun = (customStubbedSend) => {
     mockSetting('mailgun_api_key', 'test');
     mockSetting('mailgun_domain', 'example.com');
     mockSetting('mailgun_base_url', 'test');
 
-    const stubbedSend = customStubbedSend ?? sinon.fake.resolves({
+    mailgunCreateMessageStub = customStubbedSend ? sinon.stub().callsFake(customStubbedSend) : sinon.fake.resolves({
         id: `<${new Date().getTime()}.${0}.5817@samples.mailgun.org>`
     });
 
@@ -126,7 +152,7 @@ const mockMailgun = (customStubbedSend) => {
         // @ts-ignore
         messages: {
             create: async function () {
-                return await stubbedSend.call(this, ...arguments);
+                return await mailgunCreateMessageStub.call(this, ...arguments);
             }
         }
     });
@@ -258,6 +284,15 @@ const mockLabsDisabled = (flag, alpha = true) => {
     fakedLabsFlags[flag] = false;
 };
 
+const mockLimitService = (limit, options) => {
+    if (!mocks.limitService) {
+        mocks.limitService = sinon.stub(limitService);
+    }
+
+    mocks.limitService.isLimited.withArgs(limit).returns(options.isLimited);
+    mocks.limitService.checkWouldGoOverLimit.withArgs(limit).resolves(options.wouldGoOverLimit);
+};
+
 const restore = () => {
     // eslint-disable-next-line no-console
     configUtils.restore().catch(console.error);
@@ -275,7 +310,7 @@ const restore = () => {
         mocks.webhookMockReceiver.reset();
     }
 
-    mailService.GhostMailer.prototype.send = originalMailServiceSend;
+    mailService.GhostMailer.prototype.sendMail = originalMailServiceSendMail;
 
     // Disable network again after restoring sinon
     disableNetwork();
@@ -288,11 +323,13 @@ module.exports = {
     mockStripe,
     mockSlack,
     allowStripe,
+    mockGeojs,
     mockMailgun,
     mockLabsEnabled,
     mockLabsDisabled,
     mockWebhookRequests,
     mockSetting,
+    mockLimitService,
     disableNetwork,
     restore,
     stripeMocker,
@@ -300,5 +337,6 @@ module.exports = {
         sentEmailCount,
         sentEmail,
         emittedEvent
-    }
+    },
+    getMailgunCreateMessageStub: () => mailgunCreateMessageStub
 };

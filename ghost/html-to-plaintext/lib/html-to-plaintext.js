@@ -35,6 +35,7 @@ const baseSettings = {
 let excerptConverter;
 let emailConverter;
 let commentConverter;
+let commentSnippetConverter;
 
 const loadConverters = () => {
     if (excerptConverter && emailConverter) {
@@ -53,14 +54,18 @@ const loadConverters = () => {
             // Don't output hrs
             {selector: 'hr', format: 'skip'},
             // Don't output > in blockquotes
-            {selector: 'blockquote', format: 'block'}
+            {selector: 'blockquote', format: 'block'},
+            // Don't include signup cards in excerpts
+            {selector: '.kg-signup-card', format: 'skip'}
         ]
     });
 
     const emailSettings = mergeSettings({
         selectors: [
             // equiv hideLinkHrefIfSameAsText: true
-            {selector: 'a', options: {hideLinkHrefIfSameAsText: true}}
+            {selector: 'a', options: {hideLinkHrefIfSameAsText: true}},
+            // Don't include html .preheader in email
+            {selector: '.preheader', format: 'skip'}
         ]
     });
 
@@ -74,9 +79,18 @@ const loadConverters = () => {
         ]
     });
 
+    const commentSnippetSettings = mergeSettings({
+        preserveNewlines: false,
+        ignoreHref: true,
+        selectors: [
+            {selector: 'blockquote', format: 'skip'}
+        ]
+    });
+
     excerptConverter = compile(excerptSettings);
     emailConverter = compile(emailSettings);
     commentConverter = compile(commentSettings);
+    commentSnippetConverter = compile(commentSnippetSettings);
 };
 
 module.exports.excerpt = (html) => {
@@ -95,4 +109,12 @@ module.exports.comment = (html) => {
     loadConverters();
 
     return commentConverter(html);
+};
+
+module.exports.commentSnippet = (html) => {
+    loadConverters();
+
+    return commentSnippetConverter(html)
+        .replace(/\n/g, ' ')
+        .replace(/\s+/g, ' ');
 };

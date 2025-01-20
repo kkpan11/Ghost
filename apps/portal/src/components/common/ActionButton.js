@@ -1,4 +1,3 @@
-import React from 'react';
 import {ReactComponent as LoaderIcon} from '../../images/icons/loader.svg';
 import {isCookiesDisabled} from '../../utils/helpers';
 
@@ -36,12 +35,16 @@ export const ActionButtonStyles = `
         border: none;
         box-shadow: none;
     }
+    html[dir="rtl"] .gh-portal-btn-text span.right-arrow {
+        transform: scale(-1, 1);
+        display: inline-flex;
+    }
 
     .gh-portal-loadingicon {
         position: absolute;
         left: 50%;
         display: inline-block;
-        margin-left: -19px;
+        margin-inline-start: -19px;
         height: 31px;
     }
 
@@ -56,7 +59,7 @@ export const ActionButtonStyles = `
     }
 `;
 
-const Styles = ({brandColor, retry, disabled, style = {}, isPrimary}) => {
+const Styles = ({brandColor, disabled, style = {}, isPrimary}) => {
     let backgroundColor = (brandColor || '#3eb0ef');
     let opacity = '1.0';
     let pointerEvents = 'auto';

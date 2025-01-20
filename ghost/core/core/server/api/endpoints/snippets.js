@@ -1,4 +1,3 @@
-const Promise = require('bluebird');
 const errors = require('@tryghost/errors');
 const tpl = require('@tryghost/tpl');
 const models = require('../../models');
@@ -8,7 +7,8 @@ const messages = {
     snippetAlreadyExists: 'Snippet already exists.'
 };
 
-module.exports = {
+/** @type {import('@tryghost/api-framework').Controller} */
+const controller = {
     docName: 'snippets',
 
     browse: {
@@ -132,3 +132,5 @@ module.exports = {
         }
     }
 };
+
+module.exports = controller;

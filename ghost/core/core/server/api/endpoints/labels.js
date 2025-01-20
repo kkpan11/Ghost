@@ -1,4 +1,3 @@
-const Promise = require('bluebird');
 const tpl = require('@tryghost/tpl');
 const errors = require('@tryghost/errors');
 const models = require('../../models');
@@ -10,7 +9,8 @@ const messages = {
 
 const ALLOWED_INCLUDES = ['count.members'];
 
-module.exports = {
+/** @type {import('@tryghost/api-framework').Controller} */
+const controller = {
     docName: 'labels',
 
     browse: {
@@ -130,9 +130,7 @@ module.exports = {
                     }
 
                     if (model.wasChanged()) {
-                        this.headers.cacheInvalidate = true;
-                    } else {
-                        this.headers.cacheInvalidate = false;
+                        frame.setHeader('X-Cache-Invalidate', '/*');
                     }
 
                     return model;
@@ -164,3 +162,5 @@ module.exports = {
         }
     }
 };
+
+module.exports = controller;

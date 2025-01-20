@@ -29,7 +29,7 @@ module.exports = async (model, frame, options = {}) => {
     if (typeof model.toJSON === 'function') {
         jsonModel = model.toJSON(frame.options);
     } else {
-        // This is to satisy the interface which extraAttrs needs
+        // This is to satisfy the interface which extraAttrs needs
         model = {
             id: jsonModel.id,
             get(attr) {
@@ -66,6 +66,10 @@ module.exports = async (model, frame, options = {}) => {
             jsonModel.tiers = tiersData ? tiersData.filter(t => t.type === 'paid') : [];
         }
 
+        if (jsonModel.visibility === 'tiers' && Array.isArray(jsonModel.tiers)) {
+            jsonModel.tiers = jsonModel.tiers.filter(t => t.type === 'paid');
+        }
+
         if (!['members', 'public', 'paid', 'tiers'].includes(jsonModel.visibility)) {
             const tiers = await postsService.getProductsFromVisibilityFilter(jsonModel.visibility);
 
@@ -77,6 +81,7 @@ module.exports = async (model, frame, options = {}) => {
     if (utils.isContentAPI(frame)) {
         date.forPost(jsonModel);
         gating.forPost(jsonModel, frame);
+
         if (jsonModel.access) {
             if (commentsService?.api?.enabled !== 'off') {
                 jsonModel.comments = true;
@@ -86,6 +91,10 @@ module.exports = async (model, frame, options = {}) => {
         } else {
             jsonModel.comments = false;
         }
+
+        // Strip any source formats
+        delete jsonModel.mobiledoc;
+        delete jsonModel.lexical;
 
         // Add  outbound link tags
         if (labs.isSet('outboundLinkTagging')) {
